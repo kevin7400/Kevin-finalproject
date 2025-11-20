@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "finance-lstm"
+version = "0.1.0"
+description = "LSTM S&P 500 forecasting project"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy",
+  "pandas",
+  "yfinance",
+  "ta",
+  "scikit-learn",
+  "xgboost",
+  "tensorflow",
+  "joblib",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ""
+filterwarnings = [
+    "ignore:urllib3 v2 only supports OpenSSL 1.1.1+:",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py39"]
+include = '\.pyi?$'
+exclude = '''
+/(
+  \.git
+  | \.venv
+  | build
+  | dist
+  | data
+  | .pytest_cache
+)/
+'''
