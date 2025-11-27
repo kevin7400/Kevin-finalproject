@@ -35,6 +35,7 @@ from sklearn.preprocessing import MinMaxScaler
 from . import config
 from .features import get_default_processed_csv_path
 from .models.baselines import train_baseline_models
+from .visualization import plot_all_confusion_matrices
 
 # ---------------------------------------------------------------------------
 # Paths / constants
@@ -412,6 +413,23 @@ def evaluate_all_models() -> pd.DataFrame:
     out_path = RESULTS_DIR / "model_comparison.csv"
     results_df.to_csv(out_path, index=False)
     print(f"\nSaved results table to: {out_path.resolve()}")
+
+    # Generate confusion matrices for all models
+    print("\n=== Generating Confusion Matrices ===")
+    confusion_data = {}
+
+    # Add baselines
+    for name, model in models.items():
+        y_pred_reg_full = model.predict(X_test_scaled)
+        y_pred_reg_eval = y_pred_reg_full[LOOKBACK - 1 :]
+        y_pred_dir_eval = (y_pred_reg_eval > 0.0).astype(int)
+        confusion_data[name] = (y_test_cls_eval, y_pred_dir_eval)
+
+    # Add LSTM
+    confusion_data["LSTM"] = (y_test_cls_seq, y_pred_dir_lstm)
+
+    # Generate all confusion matrix plots
+    plot_all_confusion_matrices(confusion_data)
 
     return results_df
 

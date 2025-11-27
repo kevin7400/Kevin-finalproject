@@ -25,6 +25,7 @@ from tensorflow.keras.callbacks import (
 )
 
 from .. import config
+from ..visualization import plot_learning_curves
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -226,16 +227,32 @@ def evaluate_and_save_predictions(
 # ---------------------------------------------------------------------------
 
 
-def train_and_evaluate_lstm() -> tuple[float, float]:
+def train_and_evaluate_lstm() -> tuple[float, float, tf.keras.callbacks.History]:
     """
     Full LSTM workflow:
 
+      - Set random seeds for reproducibility
       - Load preprocessed LSTM data from `data/lstm/`
       - Build model based on config + data shape
       - Train model
+      - Generate and save learning curve visualizations
       - Save final model
       - Evaluate on test set and save predictions
+
+    Returns
+    -------
+    tuple[float, float, tf.keras.callbacks.History]
+        - Test MSE (Mean Squared Error)
+        - Test MAE (Mean Absolute Error)
+        - Training history object (for potential further analysis)
     """
+    # Set random seeds for reproducibility
+    import random
+
+    random.seed(config.RANDOM_SEED)
+    np.random.seed(config.RANDOM_SEED)
+    tf.random.set_seed(config.RANDOM_SEED)
+
     (
         X_train,
         y_train_reg,
@@ -250,7 +267,10 @@ def train_and_evaluate_lstm() -> tuple[float, float]:
 
     model = build_lstm_model(lookback=lookback, n_features=n_features)
 
-    train_lstm_model(model, X_train, y_train_reg)
+    history = train_lstm_model(model, X_train, y_train_reg)
+
+    # Generate and save learning curves
+    plot_learning_curves(history)
 
     # Save final model (best one already stored via ModelCheckpoint)
     final_path = LSTM_DIR / "lstm_model_final.keras"
@@ -261,7 +281,7 @@ def train_and_evaluate_lstm() -> tuple[float, float]:
         model, X_test, y_test_reg, y_test_cls
     )
     # Evaluate and store predictions
-    return test_mse, test_mae
+    return test_mse, test_mae, history
 
 
 def main() -> None:

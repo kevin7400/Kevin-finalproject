@@ -1,3 +1,6 @@
+# Random seed for reproducibility
+RANDOM_SEED = 42
+
 # Ticker to download (S&P 500 index)
 TICKER = "^GSPC"
 

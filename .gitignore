@@ -34,10 +34,11 @@ htmlcov/
 data/raw/
 data/processed/
 data/lstm/
-data/results/
 # Exception: Keep PNG visualizations for README and directory structure
 !data/results/*.png
 !data/results/.gitkeep
+data/results/*
+
 
 # Results and generated reports (if produced outside data/)
 results/

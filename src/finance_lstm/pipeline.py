@@ -84,7 +84,7 @@ def run_pipeline(
     prepare_lstm_data()
 
     print("\n=== STEP 4: Train and evaluate LSTM ===")
-    test_mse, test_mae = train_and_evaluate_lstm()
+    test_mse, test_mae, history = train_and_evaluate_lstm()
     print(f"\nLSTM test metrics: MSE={test_mse:.4f}, MAE={test_mae:.4f}")
 
     print("\n=== STEP 5: Evaluate baselines + LSTM ===")
@@ -95,6 +95,9 @@ def run_pipeline(
     print(f"  Processed CSV: {processed_path}")
     print(f"  LSTM dir:      {LSTM_DIR}")
     print(f"  Results dir:   {RESULTS_DIR}")
+    print(f"  Visualizations:")
+    print(f"    - Learning curves:     {RESULTS_DIR / 'learning_curves.png'}")
+    print(f"    - Confusion matrices:  {RESULTS_DIR / 'confusion_matrix_*.png'}")
     print(
         f"  Train period:  {config.START_DATE} -> {config.TRAIN_END} "
         f"| Test period: {config.TEST_START} -> {config.END_DATE}"

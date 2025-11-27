@@ -276,13 +276,24 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
     # 3) Stub train_lstm_model so we don't run real Keras training
     train_called = {}
 
+    class MockHistory:
+        """Mock Keras History object."""
+
+        def __init__(self):
+            self.history = {
+                "loss": [0.5, 0.4, 0.3],
+                "val_loss": [0.6, 0.5, 0.4],
+                "mae": [0.3, 0.25, 0.2],
+                "val_mae": [0.35, 0.3, 0.25],
+            }
+
     def fake_train(model, X, y, val_split=0.2):
         train_called["called"] = True
         # Ensure we received the dummy model and the synthetic data
         assert model is dummy_model
         assert X.shape == X_train.shape
         assert y.shape == y_train_reg.shape
-        return None
+        return MockHistory()
 
     monkeypatch.setattr(lstm, "train_lstm_model", fake_train)
 
@@ -297,7 +308,7 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
     monkeypatch.setattr(lstm, "evaluate_and_save_predictions", fake_eval)
 
     # Call the orchestrator
-    test_mse, test_mae = lstm.train_and_evaluate_lstm()
+    test_mse, test_mae, history = lstm.train_and_evaluate_lstm()
 
     # Assertions
     assert load_called.get("called", False)
@@ -316,6 +327,9 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
     # evaluate_and_save_predictions return values are passed through
     assert test_mse == pytest.approx(0.1234)
     assert test_mae == pytest.approx(0.5678)
+
+    # History object is returned (mocked history from fake_train)
+    assert history is not None
 
     # Shapes passed to fake_eval are those of X_test and y_test_*
     X_shape, y_reg_shape, y_cls_shape = eval_called["args"]

@@ -1,5 +1,11 @@
 # LSTM S&P 500 Forecasting Project
 
+![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
+![TensorFlow](https://img.shields.io/badge/TensorFlow-2.x-orange)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-70%25%2B-yellowgreen)
+
 This project builds an end-to-end pipeline to forecast next-day percentage returns and direction (Up/Down) for the S&P 500 using:
 
 - 12 technical indicators
@@ -11,6 +17,20 @@ The code is structured as a Python package with a `src/` layout:
 
 - Package: `finance_lstm/` (under `src/`)
 - Data folders: `data/raw/`, `data/processed/`, `data/lstm/`, `data/results/`
+
+---
+
+## Key Features
+
+- **12 Technical Indicators**: RSI, MACD, Bollinger Bands, SMA, EMA, OBV, ATR, and more
+- **Stacked LSTM Architecture**: 2-layer deep learning model with dropout regularization
+- **Comprehensive Baselines**: Linear Regression, Random Forest, XGBoost for comparison
+- **Time-Based Validation**: Proper temporal split (2018-2022 train, 2023-2024 test)
+- **Dual Task**: Predicts both return magnitude (regression) and direction (classification)
+- **Full Reproducibility**: Random seeds set for consistent results across runs
+- **Rich Visualizations**: Learning curves and confusion matrices for all models
+- **Modular Design**: Clean separation of concerns with src/ layout
+- **Comprehensive Tests**: >70% code coverage with pytest
 
 ---
 
@@ -153,7 +173,62 @@ This will:
 
 ---
 
-## 4. Running each step manually (optional)
+## 4. Results & Visualizations
+
+After running the pipeline, you'll find comprehensive model performance metrics and visualizations in the `data/results/` directory.
+
+### Model Comparison
+
+Results on the test set (2023-2024):
+
+| Model | RMSE | MAE | Accuracy | F1 Score |
+|-------|------|-----|----------|----------|
+| *Values automatically generated in `data/results/model_comparison.csv`* ||||
+
+Lower RMSE/MAE indicates better return magnitude prediction. Higher Accuracy/F1 indicates better direction classification.
+
+### Learning Curves
+
+The LSTM training progress is visualized showing both MSE (loss) and MAE over epochs:
+
+![Learning Curves](data/results/learning_curves.png)
+
+*Learning curves help identify if the model is overfitting (large gap between train/val) or needs more training epochs.*
+
+### Confusion Matrices
+
+Direction classification performance for each model is visualized:
+
+<table>
+<tr>
+<td><img src="data/results/confusion_matrix_lstm.png" width="600"/></td>
+</tr>
+<tr>
+<td align="center"><em>LSTM Model</em></td>
+</tr>
+</table>
+
+**Baselines**
+<table>
+<tr>
+<td><img src="data/results/confusion_matrix_linearregression.png" width="300"/></td>
+<td><img src="data/results/confusion_matrix_randomforest.png" width="300"/></td>
+<td><img src="data/results/confusion_matrix_xgboost.png" width="300"/></td>
+</tr>
+<tr>
+<td align="center"><em>Linear Regression</em></td>
+<td align="center"><em>Random Forest</em></td>
+<td align="center"><em>XGBoost</em></td>
+</tr>
+</table>
+
+*Confusion matrices show the classification accuracy for Up vs Down predictions. Diagonal values indicate correct predictions.*
+
+All visualizations are automatically generated when you run `python run_pipeline.py` and saved to `data/results/`.
+
+---
+
+## 5. Running each step manually (optional)
 
 If you prefer to run each step individually (for debugging or experimentation), you can use the following commands from the project root, **after** activating the virtual environment:
 
@@ -161,7 +236,7 @@ If you prefer to run each step individually (for debugging or experimentation), 
 source .venv/bin/activate
 ```
 
-### 4.1. Download data
+### 5.1. Download data
 
 ```bash
 python -m finance_lstm.download_data
@@ -173,7 +248,7 @@ python -m finance_lstm.download_data
 
   * `data/raw/sp500_YYYY_YYYY.csv` (exact name depends on config).
 
-### 4.2. Build features & targets
+### 5.2. Build features & targets
 
 ```bash
 python -m finance_lstm.features
@@ -208,7 +283,7 @@ python -m finance_lstm.features
 
   * `data/processed/sp500_YYYY_YYYY_features_targets.csv`
 
-### 4.3. Preprocess for LSTM
+### 5.3. Preprocess for LSTM
 
 ```bash
 python -m finance_lstm.preprocessing
@@ -243,7 +318,7 @@ python -m finance_lstm.preprocessing
   * `data/lstm/y_test_cls_seq.npy`
   * `data/lstm/feature_scaler.joblib`
 
-### 4.4. Train the LSTM model
+### 5.4. Train the LSTM model
 
 ```bash
 python -m finance_lstm.models.lstm
@@ -272,7 +347,7 @@ python -m finance_lstm.models.lstm
   * Predicts test returns → `data/lstm/y_pred_reg_lstm.npy`
   * Derives test directions (`> 0` → Up) → `data/lstm/y_pred_dir_lstm.npy`
 
-### 4.5. Train baseline models and evaluate all models
+### 5.5. Train baseline models and evaluate all models
 
 ```bash
 python -m finance_lstm.evaluation
@@ -307,11 +382,11 @@ python -m finance_lstm.evaluation
 
 This CSV can be used directly in the project report to show that the LSTM outperforms the baselines (lower RMSE/MAE and higher Accuracy/F1, if everything is configured correctly).
 
-## 5. Tests
+## 6. Tests
 
 A small test suite is provided to validate the core logic (feature engineering, preprocessing, models, evaluation, and pipeline imports).
 
-### 5.1. Install test dependencies
+### 6.1. Install test dependencies
 
 From the project root, after creating/activating the virtualenv:
 
@@ -326,7 +401,7 @@ If you prefer installing only the minimal dependencies for testing:
 pip install pytest pytest-cov
 ```
 
-### 5.2. Run all tests
+### 6.2. Run all tests
 
 From the project root:
 
@@ -336,7 +411,7 @@ pytest
 
 This will run all tests under the `tests/` directory.
 
-### 5.3. Run tests with coverage
+### 6.3. Run tests with coverage
 
 To measure coverage for the `finance_lstm` package:
 
@@ -354,7 +429,7 @@ pytest --cov=finance_lstm --cov-report=html
 
 This will create an `htmlcov/` folder. Open `htmlcov/index.html` in your browser to inspect coverage interactively.
 
-### 5.4. Running a specific test module
+### 6.4. Running a specific test module
 
 For quick iteration, you can run a single test file, for example:
 
@@ -366,11 +441,11 @@ pytest tests/test_lstm_model.py
 
 This is useful when you are modifying only one part of the pipeline and want fast feedback.
 
-## 6. Code style & linting
+## 7. Code style & linting
 
 This project uses **Black** for formatting and **Flake8** for linting (PEP 8 compliance).
 
-### 6.1. Install dev dependencies
+### 7.1. Install dev dependencies
 
 If you haven't already:
 
@@ -378,7 +453,7 @@ If you haven't already:
 pip install -r requirements-dev.txt
 ```
 
-### 6.2. Run Black (auto-formatter)
+### 7.2. Run Black (auto-formatter)
 
 Formats the source code, tests, and the pipeline entrypoint:
 
@@ -388,7 +463,7 @@ black src tests run_pipeline.py
 
 Black reads its configuration from `pyproject.toml` (line length, exclusions, etc.).
 
-### 6.3. Run Flake8 (linter)
+### 7.3. Run Flake8 (linter)
 
 Checks for style issues, unused imports, etc.:
 
