@@ -417,7 +417,7 @@ evaluate_all_models()
 
 * Saves the comparison table to:
 
-  * `data/results/model_comparison.csv`
+  * `results/model_comparison.csv`
 
 This CSV can be used directly in the project report to show that the LSTM outperforms the baselines (lower RMSE/MAE and higher Accuracy/F1, if everything is configured correctly).
 
