@@ -1,61 +1,284 @@
 """
-Model evaluation utilities for the S&P 500 forecasting project.
+Model evaluation and visualization.
 
-This module:
-- Loads the processed features/targets dataset.
-- Prepares scaled features for baseline models.
-- Trains three regression baselines (Linear, Random Forest, XGBoost).
-- Loads LSTM predictions from disk.
-- Computes RMSE/MAE (magnitude) and Accuracy/F1 (direction) for all models.
-- Saves a comparison table under data/results/model_comparison.csv.
+This module consolidates:
+- Model evaluation logic: train baselines, compute metrics, compare models (from evaluation.py)
+- Visualization: learning curves and confusion matrices (from visualization.py)
 
-Typical usage (from the pipeline):
-
-    from finance_lstm.evaluation import evaluate_all_models
-
-    results_df = evaluate_all_models()
-
+Public functions:
+    - plot_learning_curves()
+    - plot_confusion_matrix()
+    - plot_all_confusion_matrices()
+    - evaluate_all_models()
 """
 
 from __future__ import annotations
 
 import pathlib
-from typing import Tuple
+from typing import Tuple, Any
 
+import matplotlib
+
+matplotlib.use("Agg")  # Non-interactive backend for server environments
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from sklearn.metrics import (
     accuracy_score,
+    confusion_matrix,
     f1_score,
     mean_absolute_error,
     mean_squared_error,
 )
 from sklearn.preprocessing import MinMaxScaler
 
-from . import config
-from .features import get_default_processed_csv_path
-from .models.baselines import train_baseline_models
-from .visualization import plot_all_confusion_matrices
+# Import from data_loader
+from src.data_loader import (
+    TRAIN_END,
+    TEST_START,
+    START_DATE,
+    END_DATE,
+    LOOKBACK,
+    get_default_processed_csv_path,
+)
+
+# Import from models
+from src.models import train_baseline_models
 
 # ---------------------------------------------------------------------------
-# Paths / constants
+# Paths
 # ---------------------------------------------------------------------------
 
-# project_root/src/finance_lstm/evaluation.py -> project_root
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
-
+# src/evaluation.py -> project root
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 PROCESSED_DIR = DATA_DIR / "processed"
 LSTM_DIR = DATA_DIR / "lstm"
-RESULTS_DIR = DATA_DIR / "results"
+RESULTS_DIR = PROJECT_ROOT / "results"  # Changed from data/results/ to results/
 
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-LOOKBACK = config.LOOKBACK  # to align with LSTM test sequences
+
+# ---------------------------------------------------------------------------
+# Visualization Functions (from visualization.py)
+# ---------------------------------------------------------------------------
+
+
+def plot_learning_curves(
+    history: Any,
+    save_path: pathlib.Path | None = None,
+) -> None:
+    """
+    Plot LSTM training and validation loss/MAE over epochs.
+
+    Creates a figure with two subplots:
+    - Left: MSE (Mean Squared Error) loss
+    - Right: MAE (Mean Absolute Error)
+
+    Both plots show training and validation curves for comparison.
+
+    Parameters
+    ----------
+    history : Any
+        Keras History object from model.fit() containing training metrics.
+        Must have keys: 'loss', 'val_loss', 'mae', 'val_mae'.
+    save_path : pathlib.Path | None, optional
+        Where to save the plot. Defaults to results/learning_curves.png.
+
+    Returns
+    -------
+    None
+        The plot is saved to disk.
+
+    Raises
+    ------
+    ValueError
+        If history is None, missing required attributes, or has missing keys.
+
+    Examples
+    --------
+    >>> history = model.fit(X_train, y_train, validation_split=0.2, epochs=50)
+    >>> plot_learning_curves(history)
+    Learning curves saved to: .../results/learning_curves.png
+    """
+    if history is None or not hasattr(history, "history"):
+        raise ValueError("Invalid history object: must have 'history' attribute")
+
+    required_keys = ["loss", "val_loss", "mae", "val_mae"]
+    for key in required_keys:
+        if key not in history.history:
+            raise ValueError(f"History missing required key: {key}")
+
+    if save_path is None:
+        save_path = RESULTS_DIR / "learning_curves.png"
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Plot MSE (loss)
+    epochs = range(1, len(history.history["loss"]) + 1)
+    ax1.plot(
+        epochs,
+        history.history["loss"],
+        "b-",
+        label="Training Loss (MSE)",
+        linewidth=2,
+    )
+    ax1.plot(
+        epochs,
+        history.history["val_loss"],
+        "r-",
+        label="Validation Loss (MSE)",
+        linewidth=2,
+    )
+    ax1.set_title("Model Loss (MSE) Over Epochs", fontsize=14, fontweight="bold")
+    ax1.set_xlabel("Epoch", fontsize=12)
+    ax1.set_ylabel("MSE", fontsize=12)
+    ax1.legend(fontsize=10)
+    ax1.grid(True, alpha=0.3)
+
+    # Plot MAE
+    ax2.plot(
+        epochs, history.history["mae"], "b-", label="Training MAE", linewidth=2
+    )
+    ax2.plot(
+        epochs,
+        history.history["val_mae"],
+        "r-",
+        label="Validation MAE",
+        linewidth=2,
+    )
+    ax2.set_title("Model MAE Over Epochs", fontsize=14, fontweight="bold")
+    ax2.set_xlabel("Epoch", fontsize=12)
+    ax2.set_ylabel("MAE", fontsize=12)
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"\nLearning curves saved to: {save_path.resolve()}")
+
+
+def plot_confusion_matrix(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    model_name: str,
+    save_path: pathlib.Path | None = None,
+) -> None:
+    """
+    Generate and save a confusion matrix heatmap for direction classification.
+
+    Parameters
+    ----------
+    y_true : np.ndarray
+        True direction labels (0 = Down, 1 = Up).
+    y_pred : np.ndarray
+        Predicted direction labels (0 = Down, 1 = Up).
+    model_name : str
+        Name of the model (for title and filename).
+    save_path : pathlib.Path | None, optional
+        Where to save the plot. Defaults to results/confusion_matrix_{model_name}.png.
+
+    Returns
+    -------
+    None
+        The plot is saved to disk.
+
+    Raises
+    ------
+    ValueError
+        If y_true and y_pred have different shapes.
+
+    Examples
+    --------
+    >>> y_true = np.array([0, 1, 1, 0, 1])
+    >>> y_pred = np.array([0, 1, 0, 0, 1])
+    >>> plot_confusion_matrix(y_true, y_pred, "LSTM")
+    Confusion matrix for LSTM saved to: .../confusion_matrix_lstm.png
+    """
+    if y_true.shape != y_pred.shape:
+        raise ValueError(
+            f"Shape mismatch: y_true {y_true.shape} vs y_pred {y_pred.shape}"
+        )
+
+    if save_path is None:
+        safe_name = model_name.lower().replace(" ", "_")
+        save_path = RESULTS_DIR / f"confusion_matrix_{safe_name}.png"
+
+    # Compute confusion matrix
+    cm = confusion_matrix(y_true, y_pred)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # Plot heatmap
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        square=True,
+        cbar_kws={"label": "Count"},
+        ax=ax,
+        xticklabels=["Down (0)", "Up (1)"],
+        yticklabels=["Down (0)", "Up (1)"],
+    )
+
+    ax.set_title(
+        f"Confusion Matrix: {model_name}\nDirection Classification",
+        fontsize=14,
+        fontweight="bold",
+        pad=20,
+    )
+    ax.set_ylabel("True Label", fontsize=12)
+    ax.set_xlabel("Predicted Label", fontsize=12)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(
+        f"Confusion matrix for {model_name} saved to: {save_path.resolve()}"
+    )
+
+
+def plot_all_confusion_matrices(
+    models_dict: dict[str, tuple[np.ndarray, np.ndarray]],
+) -> None:
+    """
+    Generate confusion matrices for multiple models.
+
+    Convenience function to batch-generate confusion matrices for all models
+    being compared.
+
+    Parameters
+    ----------
+    models_dict : dict[str, tuple[np.ndarray, np.ndarray]]
+        Dictionary with model names as keys and (y_true, y_pred) tuples as values.
+
+    Returns
+    -------
+    None
+        All plots are saved to disk.
+
+    Examples
+    --------
+    >>> models_dict = {
+    ...     "LSTM": (y_test_true, y_test_pred_lstm),
+    ...     "Random Forest": (y_test_true, y_test_pred_rf),
+    ... }
+    >>> plot_all_confusion_matrices(models_dict)
+    Confusion matrix for LSTM saved to: ...
+    Confusion matrix for Random Forest saved to: ...
+    """
+    for model_name, (y_true, y_pred) in models_dict.items():
+        plot_confusion_matrix(y_true, y_pred, model_name)
 
 
 # ---------------------------------------------------------------------------
-# Data loading / splitting
+# Evaluation Functions (from evaluation.py)
 # ---------------------------------------------------------------------------
 
 
@@ -94,8 +317,8 @@ def load_processed_dataset(
 
 def train_test_split_by_date(
     df: pd.DataFrame,
-    train_end: str = config.TRAIN_END,
-    test_start: str = config.TEST_START,
+    train_end: str = TRAIN_END,
+    test_start: str = TEST_START,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Split a time series DataFrame into train and test sets by date.
 
@@ -132,7 +355,7 @@ def train_test_split_by_date(
 
     if df_train.empty or df_test.empty:
         raise RuntimeError(
-            "Train or test set is empty; check date bounds in config.py."
+            "Train or test set is empty; check date bounds in config."
         )
 
     return df_train, df_test
@@ -221,11 +444,6 @@ def prepare_features_and_targets(
     )
 
 
-# ---------------------------------------------------------------------------
-# Metrics helpers
-# ---------------------------------------------------------------------------
-
-
 def evaluate_regression_and_direction(
     y_true_reg: np.ndarray,
     y_true_cls: np.ndarray,
@@ -253,11 +471,6 @@ def evaluate_regression_and_direction(
     f1 = float(f1_score(y_true_cls, y_pred_dir))
 
     return rmse, mae, acc, f1
-
-
-# ---------------------------------------------------------------------------
-# LSTM predictions loading
-# ---------------------------------------------------------------------------
 
 
 def load_lstm_predictions(
@@ -308,11 +521,6 @@ def load_lstm_predictions(
     return y_test_reg_seq, y_test_cls_seq, y_pred_reg_lstm, y_pred_dir_lstm
 
 
-# ---------------------------------------------------------------------------
-# Orchestrator used by the pipeline
-# ---------------------------------------------------------------------------
-
-
 def evaluate_all_models() -> pd.DataFrame:
     """Train baselines, evaluate them and the LSTM, and save comparison table.
 
@@ -323,7 +531,7 @@ def evaluate_all_models() -> pd.DataFrame:
         4. Align test subset with LSTM's effective test window (drop first LOOKBACK-1).
         5. Compute RMSE/MAE/Accuracy/F1 for each baseline.
         6. Load LSTM predictions and compute the same metrics.
-        7. Save the comparison as data/results/model_comparison.csv.
+        7. Save the comparison as results/model_comparison.csv.
 
     Returns:
         A pandas DataFrame with one row per model and metrics columns.
@@ -405,8 +613,8 @@ def evaluate_all_models() -> pd.DataFrame:
 
     print(
         "\n=== Model Comparison on Test Set "
-        f"({config.START_DATE[:4]}–{config.TRAIN_END[:4]} train, "
-        f"{config.TEST_START[:4]}–{config.END_DATE[:4]} test) ==="
+        f"({START_DATE[:4]}–{TRAIN_END[:4]} train, "
+        f"{TEST_START[:4]}–{END_DATE[:4]} test) ==="
     )
     print(results_df.to_string(index=False))
 

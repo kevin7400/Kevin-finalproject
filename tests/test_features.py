@@ -4,8 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from finance_lstm import config
-from finance_lstm import features
+import src.data_loader as data_loader
 
 
 # --------------------------------------------------------------------------------------
@@ -18,10 +17,10 @@ def test_get_default_processed_csv_path_uses_years_from_config():
     The processed CSV path should contain START_DATE and END_DATE years
     in the filename, e.g. sp500_2018_2024_features_targets.csv.
     """
-    path = features.get_default_processed_csv_path()
+    path = data_loader.get_default_processed_csv_path()
 
-    start_year = config.START_DATE[:4]
-    end_year = config.END_DATE[:4]
+    start_year = data_loader.START_DATE[:4]
+    end_year = data_loader.END_DATE[:4]
     expected_name = f"sp500_{start_year}_{end_year}_features_targets.csv"
 
     assert path.name == expected_name
@@ -57,7 +56,7 @@ def test_load_raw_data_ok(tmp_path: pathlib.Path):
     csv_path = tmp_path / "raw.csv"
     df_raw.to_csv(csv_path, index=True)
 
-    df_loaded = features.load_raw_data(csv_path)
+    df_loaded = data_loader.load_raw_data(csv_path)
 
     # Index should be datetime and match
     assert isinstance(df_loaded.index, pd.DatetimeIndex)
@@ -88,7 +87,7 @@ def test_load_raw_data_missing_columns_raises(tmp_path: pathlib.Path):
     df_raw.to_csv(csv_path, index=True)
 
     with pytest.raises(RuntimeError, match="Missing required columns"):
-        features.load_raw_data(csv_path)
+        data_loader.load_raw_data(csv_path)
 
 
 # --------------------------------------------------------------------------------------
@@ -107,7 +106,7 @@ def test_add_targets_computes_returns_and_directions():
     dates = pd.date_range("2020-01-01", periods=len(closes), freq="D")
     df = pd.DataFrame({"close": closes}, index=dates)
 
-    df_with_targets = features.add_targets(df.copy(), threshold=0.0)
+    df_with_targets = data_loader.add_targets(df.copy(), threshold=0.0)
 
     # Expected next-day returns for first 3 rows; last is NaN
     expected_returns = []
@@ -165,7 +164,7 @@ def test_add_technical_indicators_adds_all_expected_columns():
     """
     df = _make_simple_ohlcv(n=80)
 
-    df_ind = features.add_technical_indicators(df.copy())
+    df_ind = data_loader.add_technical_indicators(df.copy())
 
     expected_cols = [
         "rsi_14",
@@ -207,9 +206,9 @@ def test_build_feature_target_dataset_uses_raw_csv(monkeypatch, tmp_path):
     df_raw.to_csv(raw_path, index=True)
 
     # Make the module use our temp raw path
-    monkeypatch.setattr(features, "RAW_CSV", raw_path)
+    monkeypatch.setattr(data_loader, "RAW_CSV", raw_path)
 
-    df_final = features.build_feature_target_dataset()
+    df_final = data_loader.build_feature_target_dataset()
 
     # Should not be empty after dropping NaNs
     assert len(df_final) > 0
@@ -254,14 +253,14 @@ def test_build_and_save_feature_target_dataset_writes_to_processed_csv(
     raw_path = tmp_path / "sp500_fake_raw.csv"
     df_raw.to_csv(raw_path, index=True)
 
-    monkeypatch.setattr(features, "RAW_CSV", raw_path)
+    monkeypatch.setattr(data_loader, "RAW_CSV", raw_path)
 
     # 2) Point PROCESSED_CSV to a temp file
     processed_path = tmp_path / "sp500_fake_features_targets.csv"
-    monkeypatch.setattr(features, "PROCESSED_CSV", processed_path)
+    monkeypatch.setattr(data_loader, "PROCESSED_CSV", processed_path)
 
     # 3) Run
-    out_path = features.build_and_save_feature_target_dataset()
+    out_path = data_loader.build_and_save_feature_target_dataset()
 
     assert out_path == processed_path
     assert processed_path.exists()

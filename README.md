@@ -13,10 +13,12 @@ This project builds an end-to-end pipeline to forecast next-day percentage retur
 - Baseline models (Linear Regression, Random Forest, XGBoost)
 - A time-based train/test split (default: 2018–2022 train, 2023–2024 test)
 
-The code is structured as a Python package with a `src/` layout:
+The code follows a simplified 3-file structure under `src/`:
 
-- Package: `finance_lstm/` (under `src/`)
-- Data folders: `data/raw/`, `data/processed/`, `data/lstm/`, `data/results/`
+- **Source files**: `src/data_loader.py`, `src/models.py`, `src/evaluation.py`
+- **Entry point**: `main.py`
+- **Data folders**: `data/raw/`, `data/processed/`, `data/lstm/`, `results/`
+- **Notebooks**: `notebooks/exploration.ipynb`
 
 ---
 
@@ -36,37 +38,36 @@ The code is structured as a Python package with a `src/` layout:
 
 ## 1. Setup (once)
 
+### Option A: Using pip and virtualenv
+
 From the project root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install the project in editable mode (also installs dependencies)
-pip install -e .
-````
-
-Recommended Python version: **3.10+** (the code has been tested with Python 3.9+).
-
-If needed, you can also install from `requirements.txt`:
-
-```bash
 pip install -r requirements.txt
 ```
 
-(but `pip install -e .` is enough, as it installs the package and its dependencies).
+### Option B: Using conda
+
+```bash
+conda env create -f environment.yml
+conda activate kevin-lstm
+```
+
+Recommended Python version: **3.9+** (tested with Python 3.9 and higher).
 
 ---
 
-## 2. Configuration (`src/finance_lstm/config.py`)
+## 2. Configuration (`src/data_loader.py`)
 
-All main project settings are centralized in:
+All main project settings are centralized at the top of:
 
-* `src/finance_lstm/config.py`
+* `src/data_loader.py`
 
 The rest of the modules read from this file and **do not** hard-code dates or hyperparameters.
 
-Typical contents of `config.py`:
+Configuration constants:
 
 ```python
 # Ticker to download (S&P 500 index)
@@ -96,26 +97,31 @@ LSTM_CONFIG = {
 
 These values are used by:
 
-* `finance_lstm.download_data` for ticker and download date range
-* `finance_lstm.features` for building indicators and targets
-* `finance_lstm.preprocessing` for the train/test split and lookback
-* `finance_lstm.models.lstm` for the LSTM architecture and training
-* `finance_lstm.evaluation` for aligning baseline evaluation
-* `finance_lstm.pipeline` to orchestrate everything
+* `src.data_loader` for ticker, download, features, and preprocessing
+* `src.models` for the LSTM architecture and training
+* `src.evaluation` for model evaluation and visualization
+* `main.py` to orchestrate everything
 
-If you change any of these in `config.py`, the whole pipeline will adapt automatically on the next run.
+If you change any of these constants, the whole pipeline will adapt automatically on the next run.
 
-> Note: if you significantly change `START_DATE` / `END_DATE` after you already generated data, you may want to delete existing files under `data/raw/`, `data/processed/`, and `data/lstm/` so the pipeline can rebuild everything using the new configuration.
+> **Note**: If you significantly change `START_DATE` / `END_DATE` after you already generated data, delete existing files under `data/raw/`, `data/processed/`, and `data/lstm/` so the pipeline can rebuild everything using the new configuration.
 
 ---
 
 ## 3. Run the full pipeline
 
-Once the virtual environment is activated:
+Once the environment is activated:
 
+**Using virtualenv:**
 ```bash
 source .venv/bin/activate
-python run_pipeline.py
+python main.py
+```
+
+**Using conda:**
+```bash
+conda activate kevin-lstm
+python main.py
 ```
 
 This will:
@@ -132,7 +138,7 @@ This will:
 
    * `data/processed/sp500_YYYY_YYYY_features_targets.csv`
 
-3. **Preprocess data for LSTM** via `finance_lstm.preprocessing`:
+3. **Preprocess data for LSTM** via `src.data_loader`:
 
    * Time-based split using `config.TRAIN_END` and `config.TEST_START`
    * MinMax scaling of the 12 indicators
@@ -143,7 +149,7 @@ This will:
      * `X_test_seq.npy`, `y_test_reg_seq.npy`, `y_test_cls_seq.npy`
      * `feature_scaler.joblib`
 
-4. **Train the LSTM model** via `finance_lstm.models.lstm`:
+4. **Train the LSTM model** via `src.models`:
 
    * Stacked LSTM layers with sizes/dropout from `config.LSTM_CONFIG`
    * `Dense(1, linear)` output for next-day percentage return
@@ -155,7 +161,7 @@ This will:
      * `y_pred_reg_lstm.npy` (continuous % returns)
      * `y_pred_dir_lstm.npy` (Up/Down labels from predicted sign)
 
-5. **Train baseline models and evaluate all models** via `finance_lstm.evaluation`:
+5. **Train baseline models and evaluate all models** via `src.evaluation`:
 
    * Baselines (trained on flat features):
 
@@ -169,13 +175,13 @@ This will:
      * **Accuracy**, **F1** (direction, using sign of predicted return)
    * Results are printed and saved to:
 
-     * `data/results/model_comparison.csv`
+     * `results/model_comparison.csv`
 
 ---
 
 ## 4. Results & Visualizations
 
-After running the pipeline, you'll find comprehensive model performance metrics and visualizations in the `data/results/` directory.
+After running the pipeline, you'll find comprehensive model performance metrics and visualizations in the `results/` directory.
 
 ### Model Comparison
 
@@ -183,7 +189,7 @@ Results on the test set (2023-2024):
 
 | Model | RMSE | MAE | Accuracy | F1 Score |
 |-------|------|-----|----------|----------|
-| *Values automatically generated in `data/results/model_comparison.csv`* ||||
+| *Values automatically generated in `results/model_comparison.csv`* ||||
 
 Lower RMSE/MAE indicates better return magnitude prediction. Higher Accuracy/F1 indicates better direction classification.
 
@@ -191,7 +197,7 @@ Lower RMSE/MAE indicates better return magnitude prediction. Higher Accuracy/F1 
 
 The LSTM training progress is visualized showing both MSE (loss) and MAE over epochs:
 
-![Learning Curves](data/results/learning_curves.png)
+![Learning Curves](results/learning_curves.png)
 
 *Learning curves help identify if the model is overfitting (large gap between train/val) or needs more training epochs.*
 
@@ -201,7 +207,7 @@ Direction classification performance for each model is visualized:
 
 <table>
 <tr>
-<td><img src="data/results/confusion_matrix_lstm.png" width="600"/></td>
+<td><img src="results/confusion_matrix_lstm.png" width="600"/></td>
 </tr>
 <tr>
 <td align="center"><em>LSTM Model</em></td>
@@ -211,9 +217,9 @@ Direction classification performance for each model is visualized:
 **Baselines**
 <table>
 <tr>
-<td><img src="data/results/confusion_matrix_linearregression.png" width="300"/></td>
-<td><img src="data/results/confusion_matrix_randomforest.png" width="300"/></td>
-<td><img src="data/results/confusion_matrix_xgboost.png" width="300"/></td>
+<td><img src="results/confusion_matrix_linearregression.png" width="300"/></td>
+<td><img src="results/confusion_matrix_randomforest.png" width="300"/></td>
+<td><img src="results/confusion_matrix_xgboost.png" width="300"/></td>
 </tr>
 <tr>
 <td align="center"><em>Linear Regression</em></td>
@@ -224,34 +230,64 @@ Direction classification performance for each model is visualized:
 
 *Confusion matrices show the classification accuracy for Up vs Down predictions. Diagonal values indicate correct predictions.*
 
-All visualizations are automatically generated when you run `python run_pipeline.py` and saved to `data/results/`.
+All visualizations are automatically generated when you run `python main.py` and saved to `results/`.
+
+### Interactive Exploration
+
+An interactive Jupyter notebook is provided for exploring the data and results:
+
+```bash
+jupyter notebook notebooks/exploration.ipynb
+```
+
+The notebook includes:
+- Data loading and inspection
+- Target distribution analysis
+- Technical indicators visualization
+- Feature correlation heatmaps
+- Model comparison charts
+- Learning curves and confusion matrices
+- Summary insights
 
 ---
 
-## 5. Running each step manually (optional)
+## 5. Project Structure
 
-If you prefer to run each step individually (for debugging or experimentation), you can use the following commands from the project root, **after** activating the virtual environment:
-
-```bash
-source .venv/bin/activate
+```
+kevin-lstm/
+├── src/
+│   ├── data_loader.py      # Data download, feature engineering, preprocessing
+│   ├── models.py            # LSTM and baseline models
+│   └── evaluation.py        # Model evaluation and visualization
+├── notebooks/
+│   └── exploration.ipynb    # Interactive data exploration
+├── tests/                   # Test suite (pytest)
+├── data/
+│   ├── raw/                 # Downloaded S&P 500 data
+│   ├── processed/           # Features and targets
+│   └── lstm/                # LSTM sequences and models
+├── results/                 # Visualizations and metrics
+├── main.py                  # Pipeline entry point
+├── environment.yml          # Conda environment
+└── requirements.txt         # pip dependencies
 ```
 
-### 5.1. Download data
+## 6. Running each step manually (optional)
 
-```bash
-python -m finance_lstm.download_data
+You can import and run individual functions from Python for debugging:
+
+### 6.1. Download data
+
+```python
+from src.data_loader import download_and_save_raw_data
+download_and_save_raw_data(force=True)
 ```
 
-* Uses `config.TICKER`, `config.START_DATE`, and `config.END_DATE`.
-* Downloads daily OHLCV data (e.g. S&P 500 via `^GSPC`) using `yfinance`.
-* Saves to:
+### 6.2. Build features & targets
 
-  * `data/raw/sp500_YYYY_YYYY.csv` (exact name depends on config).
-
-### 5.2. Build features & targets
-
-```bash
-python -m finance_lstm.features
+```python
+from src.data_loader import build_and_save_feature_target_dataset
+build_and_save_feature_target_dataset()
 ```
 
 * Loads the raw CSV from `data/raw/`.
@@ -283,10 +319,11 @@ python -m finance_lstm.features
 
   * `data/processed/sp500_YYYY_YYYY_features_targets.csv`
 
-### 5.3. Preprocess for LSTM
+### 6.3. Preprocess for LSTM
 
-```bash
-python -m finance_lstm.preprocessing
+```python
+from src.data_loader import prepare_lstm_data
+prepare_lstm_data()
 ```
 
 * Loads the processed dataset from `data/processed/`.
@@ -318,10 +355,11 @@ python -m finance_lstm.preprocessing
   * `data/lstm/y_test_cls_seq.npy`
   * `data/lstm/feature_scaler.joblib`
 
-### 5.4. Train the LSTM model
+### 6.4. Train the LSTM model
 
-```bash
-python -m finance_lstm.models.lstm
+```python
+from src.models import train_and_evaluate_lstm
+train_and_evaluate_lstm()
 ```
 
 * Loads the LSTM-ready arrays from `data/lstm/`.
@@ -347,13 +385,14 @@ python -m finance_lstm.models.lstm
   * Predicts test returns → `data/lstm/y_pred_reg_lstm.npy`
   * Derives test directions (`> 0` → Up) → `data/lstm/y_pred_dir_lstm.npy`
 
-### 5.5. Train baseline models and evaluate all models
+### 6.5. Train baseline models and evaluate all models
 
-```bash
-python -m finance_lstm.evaluation
+```python
+from src.evaluation import evaluate_all_models
+evaluate_all_models()
 ```
 
-* Loads the processed dataset and applies the same time-based train/test split using `config.TRAIN_END` and `config.TEST_START`.
+* Loads the processed dataset and applies the same time-based train/test split.
 
 * Scales features with `MinMaxScaler` (fit on train, transform test).
 
@@ -382,11 +421,11 @@ python -m finance_lstm.evaluation
 
 This CSV can be used directly in the project report to show that the LSTM outperforms the baselines (lower RMSE/MAE and higher Accuracy/F1, if everything is configured correctly).
 
-## 6. Tests
+## 7. Tests
 
 A small test suite is provided to validate the core logic (feature engineering, preprocessing, models, evaluation, and pipeline imports).
 
-### 6.1. Install test dependencies
+### 7.1. Install test dependencies
 
 From the project root, after creating/activating the virtualenv:
 
@@ -401,22 +440,37 @@ If you prefer installing only the minimal dependencies for testing:
 pip install pytest pytest-cov
 ```
 
-### 6.2. Run all tests
+### 7.2. Run all tests
+
+**IMPORTANT**: You must activate the virtualenv before running tests.
 
 From the project root:
 
+**Using virtualenv:**
 ```bash
-pytest
+source .venv/bin/activate
+pytest tests/
+```
+
+**Using conda:**
+```bash
+conda activate kevin-lstm
+pytest tests/
 ```
 
 This will run all tests under the `tests/` directory.
 
-### 6.3. Run tests with coverage
+**Troubleshooting:**
+- If you get `pytest: command not found`, the virtualenv is not activated
+- Alternatively, run without activating: `.venv/bin/pytest tests/`
+- For verbose output, add `-v`: `pytest tests/ -v`
 
-To measure coverage for the `finance_lstm` package:
+### 7.3. Run tests with coverage
+
+To measure coverage for the `src` modules (with virtualenv activated):
 
 ```bash
-pytest --cov=finance_lstm --cov-report=term-missing
+pytest --cov=src --cov-report=term-missing tests/
 ```
 
 This prints a line-by-line summary to the terminal, including which lines are not covered.
@@ -424,28 +478,28 @@ This prints a line-by-line summary to the terminal, including which lines are no
 You can also generate an HTML coverage report:
 
 ```bash
-pytest --cov=finance_lstm --cov-report=html
+pytest --cov=src --cov-report=html tests/
 ```
 
 This will create an `htmlcov/` folder. Open `htmlcov/index.html` in your browser to inspect coverage interactively.
 
-### 6.4. Running a specific test module
+### 7.4. Running a specific test module
 
-For quick iteration, you can run a single test file, for example:
+For quick iteration, you can run a single test file (with virtualenv activated):
 
 ```bash
-pytest tests/test_features.py
-pytest tests/test_preprocessing.py
-pytest tests/test_lstm_model.py
+pytest tests/test_features.py -v
+pytest tests/test_preprocessing.py -v
+pytest tests/test_lstm_model.py -v
 ```
 
 This is useful when you are modifying only one part of the pipeline and want fast feedback.
 
-## 7. Code style & linting
+## 8. Code style & linting
 
 This project uses **Black** for formatting and **Flake8** for linting (PEP 8 compliance).
 
-### 7.1. Install dev dependencies
+### 8.1. Install dev dependencies
 
 If you haven't already:
 
@@ -453,22 +507,22 @@ If you haven't already:
 pip install -r requirements-dev.txt
 ```
 
-### 7.2. Run Black (auto-formatter)
+### 8.2. Run Black (auto-formatter)
 
 Formats the source code, tests, and the pipeline entrypoint:
 
 ```bash
-black src tests run_pipeline.py
+black src tests main.py
 ```
 
 Black reads its configuration from `pyproject.toml` (line length, exclusions, etc.).
 
-### 7.3. Run Flake8 (linter)
+### 8.3. Run Flake8 (linter)
 
 Checks for style issues, unused imports, etc.:
 
 ```bash
-flake8 src tests run_pipeline.py
+flake8 src tests main.py
 ```
 
 Flake8 is configured via `.flake8` in the project root. The goal is for **both Black and Flake8 to run cleanly** before committing or submitting the project.

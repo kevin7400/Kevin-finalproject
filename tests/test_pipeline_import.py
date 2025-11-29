@@ -1,4 +1,4 @@
-from finance_lstm.pipeline import run_pipeline
+from main import run_pipeline
 
 
 def test_run_pipeline_is_callable():

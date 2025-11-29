@@ -1,54 +1,81 @@
+#!/usr/bin/env python
+
 """
-End-to-end pipeline orchestration for the S&P 500 LSTM project.
+Main entry point for the S&P 500 LSTM stock prediction project.
 
-This module coordinates the main steps:
+This script orchestrates the full pipeline:
+    1. Download raw OHLCV data via yfinance
+    2. Build 12 technical indicators + 2 targets
+    3. Preprocess data into LSTM-ready sequences
+    4. Train and evaluate LSTM model
+    5. Train baseline models and compare results
 
-    1. Download raw OHLCV data via yfinance.
-    2. Build the 12 indicators + 2 targets and save a processed CSV.
-    3. Preprocess the data into LSTM-ready 3D sequences.
-    4. Train and evaluate the LSTM model.
-    5. Train baseline models and compare all models (LSTM + baselines).
+Usage (from project root):
 
-Typical usage (from the project root):
+    python main.py
 
-    from finance_lstm.pipeline import run_pipeline
-    run_pipeline()
+Or with conda:
 
-The root-level run_pipeline.py script will just import and call this function.
+    conda activate kevin-lstm
+    python main.py
 """
 
 from __future__ import annotations
 
+import os
 import pathlib
 
 import pandas as pd
 
-from . import config
-from .download_data import download_and_save_raw_data
-from .features import (
+from src.data_loader import (
+    download_and_save_raw_data,
     build_and_save_feature_target_dataset,
     get_default_processed_csv_path,
+    prepare_lstm_data,
+    START_DATE,
+    END_DATE,
+    TRAIN_END,
+    TEST_START,
 )
-from .preprocessing import prepare_lstm_data
-from .models.lstm import train_and_evaluate_lstm
-from .evaluation import evaluate_all_models
+from src.models import train_and_evaluate_lstm
+from src.evaluation import evaluate_all_models
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
-# src/finance_lstm/pipeline.py -> src -> project root
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parent
 
 DATA_DIR = PROJECT_ROOT / "data"
 RAW_DIR = DATA_DIR / "raw"
 PROCESSED_DIR = DATA_DIR / "processed"
 LSTM_DIR = DATA_DIR / "lstm"
-RESULTS_DIR = DATA_DIR / "results"
+RESULTS_DIR = PROJECT_ROOT / "results"  # Changed from data/results/
 
 
 # ---------------------------------------------------------------------------
-# Orchestrator
+# Environment check
+# ---------------------------------------------------------------------------
+
+
+def ensure_venv() -> None:
+    """Warn if the user is not inside a virtual environment."""
+    if "VIRTUAL_ENV" not in os.environ and "CONDA_PREFIX" not in os.environ:
+        print("---- ENVIRONMENT WARNING ----")
+        print("You are not running inside a virtual environment.")
+        print("Recommended steps (from project root):")
+        print("\nUsing pip:")
+        print("  python3 -m venv .venv")
+        print("  source .venv/bin/activate")
+        print("  pip install -r requirements.txt")
+        print("\nOr using conda:")
+        print("  conda env create -f environment.yml")
+        print("  conda activate kevin-lstm")
+        print()
+
+
+# ---------------------------------------------------------------------------
+# Pipeline
 # ---------------------------------------------------------------------------
 
 
@@ -99,18 +126,16 @@ def run_pipeline(
     print(f"    - Learning curves:     {RESULTS_DIR / 'learning_curves.png'}")
     print(f"    - Confusion matrices:  {RESULTS_DIR / 'confusion_matrix_*.png'}")
     print(
-        f"  Train period:  {config.START_DATE} -> {config.TRAIN_END} "
-        f"| Test period: {config.TEST_START} -> {config.END_DATE}"
+        f"  Train period:  {START_DATE} -> {TRAIN_END} "
+        f"| Test period: {TEST_START} -> {END_DATE}"
     )
 
     return results_df
 
 
 def main() -> None:
-    """Allow running this module directly:
-
-    python -m finance_lstm.pipeline
-    """
+    """Main entry point."""
+    ensure_venv()
     run_pipeline()
 
 

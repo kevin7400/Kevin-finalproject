@@ -22,13 +22,11 @@ dependencies = [
 ]
 
 [tool.setuptools]
-package-dir = {"" = "src"}
-
-[tool.setuptools.packages.find]
-where = ["src"]
+packages = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = ""
 filterwarnings = [
     "ignore:urllib3 v2 only supports OpenSSL 1.1.1+:",

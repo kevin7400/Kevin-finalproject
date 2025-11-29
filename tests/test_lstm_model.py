@@ -3,7 +3,7 @@ import pathlib
 import numpy as np
 import pytest
 
-from finance_lstm.models import lstm
+import src.models as models
 
 
 # --------------------------------------------------------------------------------------
@@ -42,7 +42,7 @@ def test_load_lstm_data_reads_arrays_from_lstm_dir(monkeypatch, tmp_path: pathli
     and cast X/y_reg to float32.
     """
     # Patch LSTM_DIR to our temp directory
-    monkeypatch.setattr(lstm, "LSTM_DIR", tmp_path)
+    monkeypatch.setattr(models, "LSTM_DIR", tmp_path)
 
     # Create minimal synthetic arrays
     X_train, y_train_reg, y_train_cls, X_test, y_test_reg, y_test_cls = (
@@ -63,7 +63,7 @@ def test_load_lstm_data_reads_arrays_from_lstm_dir(monkeypatch, tmp_path: pathli
         X_test_loaded,
         y_test_reg_loaded,
         y_test_cls_loaded,
-    ) = lstm.load_lstm_data()
+    ) = models.load_lstm_data()
 
     assert X_train_loaded.shape == X_train.shape
     assert X_test_loaded.shape == X_test.shape
@@ -90,16 +90,16 @@ def test_build_lstm_model_respects_config(monkeypatch):
     and create a model with the right input shape and output size.
     """
     # Backup and patch config
-    old_cfg = dict(lstm.config.LSTM_CONFIG)
+    old_cfg = dict(models.LSTM_CONFIG)
     try:
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "units1", 4)
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "units2", 2)
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "dropout", 0.1)
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "learning_rate", 1e-3)
+        monkeypatch.setitem(models.LSTM_CONFIG, "units1", 4)
+        monkeypatch.setitem(models.LSTM_CONFIG, "units2", 2)
+        monkeypatch.setitem(models.LSTM_CONFIG, "dropout", 0.1)
+        monkeypatch.setitem(models.LSTM_CONFIG, "learning_rate", 1e-3)
 
         lookback = 7
         n_features = 3
-        model = lstm.build_lstm_model(lookback=lookback, n_features=n_features)
+        model = models.build_lstm_model(lookback=lookback, n_features=n_features)
 
         # Input shape: (None, lookback, n_features)
         assert model.input_shape == (None, lookback, n_features)
@@ -117,8 +117,8 @@ def test_build_lstm_model_respects_config(monkeypatch):
         assert dense_layers[-1].units == 1
     finally:
         # Restore config
-        lstm.config.LSTM_CONFIG.clear()
-        lstm.config.LSTM_CONFIG.update(old_cfg)
+        models.LSTM_CONFIG.clear()
+        models.LSTM_CONFIG.update(old_cfg)
 
 
 # --------------------------------------------------------------------------------------
@@ -132,17 +132,17 @@ def test_train_lstm_model_runs_one_epoch(monkeypatch, tmp_path: pathlib.Path):
     a checkpoint file in LSTM_DIR.
     """
     # Patch LSTM_DIR to temp dir
-    monkeypatch.setattr(lstm, "LSTM_DIR", tmp_path)
+    monkeypatch.setattr(models, "LSTM_DIR", tmp_path)
 
     # Patch config for a tiny, fast training run
-    old_cfg = dict(lstm.config.LSTM_CONFIG)
+    old_cfg = dict(models.LSTM_CONFIG)
     try:
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "units1", 2)
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "units2", 2)
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "dropout", 0.0)
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "batch_size", 4)
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "epochs", 1)
-        monkeypatch.setitem(lstm.config.LSTM_CONFIG, "learning_rate", 1e-3)
+        monkeypatch.setitem(models.LSTM_CONFIG, "units1", 2)
+        monkeypatch.setitem(models.LSTM_CONFIG, "units2", 2)
+        monkeypatch.setitem(models.LSTM_CONFIG, "dropout", 0.0)
+        monkeypatch.setitem(models.LSTM_CONFIG, "batch_size", 4)
+        monkeypatch.setitem(models.LSTM_CONFIG, "epochs", 1)
+        monkeypatch.setitem(models.LSTM_CONFIG, "learning_rate", 1e-3)
 
         # Tiny synthetic data
         lookback = 4
@@ -150,9 +150,9 @@ def test_train_lstm_model_runs_one_epoch(monkeypatch, tmp_path: pathlib.Path):
         X_train = np.random.randn(8, lookback, n_features).astype("float32")
         y_train_reg = np.random.randn(8).astype("float32")
 
-        model = lstm.build_lstm_model(lookback=lookback, n_features=n_features)
+        model = models.build_lstm_model(lookback=lookback, n_features=n_features)
 
-        history = lstm.train_lstm_model(model, X_train, y_train_reg, val_split=0.25)
+        history = models.train_lstm_model(model, X_train, y_train_reg, val_split=0.25)
 
         # We don't care about actual metrics, just that fit ran and
         # a checkpoint was created.
@@ -160,8 +160,8 @@ def test_train_lstm_model_runs_one_epoch(monkeypatch, tmp_path: pathlib.Path):
         assert ckpt_path.exists(), "Expected checkpoint file was not created."
         assert hasattr(history, "history")
     finally:
-        lstm.config.LSTM_CONFIG.clear()
-        lstm.config.LSTM_CONFIG.update(old_cfg)
+        models.LSTM_CONFIG.clear()
+        models.LSTM_CONFIG.update(old_cfg)
 
 
 # --------------------------------------------------------------------------------------
@@ -173,10 +173,10 @@ def test_evaluate_and_save_predictions_saves_npy(monkeypatch, tmp_path: pathlib.
     """
     evaluate_and_save_predictions should:
       - call model.evaluate and model.predict
-      - save y_pred_reg_lstm.npy and y_pred_dir_lstm.npy under LSTM_DIR
+      - save y_pred_reg_models.npy and y_pred_dir_models.npy under LSTM_DIR
       - return (test_loss, test_mae) as floats.
     """
-    monkeypatch.setattr(lstm, "LSTM_DIR", tmp_path)
+    monkeypatch.setattr(models, "LSTM_DIR", tmp_path)
 
     # Simple deterministic "model"
     class DummyModel:
@@ -200,7 +200,7 @@ def test_evaluate_and_save_predictions_saves_npy(monkeypatch, tmp_path: pathlib.
     y_test_reg = np.array([0.05, -0.1, 0.0], dtype="float32")
     y_test_cls = np.array([1, 0, 0], dtype="int64")
 
-    test_loss, test_mae = lstm.evaluate_and_save_predictions(
+    test_loss, test_mae = models.evaluate_and_save_predictions(
         dummy, X_test, y_test_reg, y_test_cls
     )
 
@@ -242,7 +242,7 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
       - save final model under LSTM_DIR
       - call evaluate_and_save_predictions and return its metrics.
     """
-    monkeypatch.setattr(lstm, "LSTM_DIR", tmp_path)
+    monkeypatch.setattr(models, "LSTM_DIR", tmp_path)
 
     # 1) Stub load_lstm_data to return small deterministic arrays
     X_train, y_train_reg, y_train_cls, X_test, y_test_reg, y_test_cls = (
@@ -254,7 +254,7 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
         load_called["called"] = True
         return X_train, y_train_reg, y_train_cls, X_test, y_test_reg, y_test_cls
 
-    monkeypatch.setattr(lstm, "load_lstm_data", fake_load)
+    monkeypatch.setattr(models, "load_lstm_data", fake_load)
 
     # 2) Dummy model that can be "saved"
     class DummyModel:
@@ -271,7 +271,7 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
         build_called["args"] = (lookback, n_features)
         return dummy_model
 
-    monkeypatch.setattr(lstm, "build_lstm_model", fake_build)
+    monkeypatch.setattr(models, "build_lstm_model", fake_build)
 
     # 3) Stub train_lstm_model so we don't run real Keras training
     train_called = {}
@@ -295,7 +295,7 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
         assert y.shape == y_train_reg.shape
         return MockHistory()
 
-    monkeypatch.setattr(lstm, "train_lstm_model", fake_train)
+    monkeypatch.setattr(models, "train_lstm_model", fake_train)
 
     # 4) Stub evaluate_and_save_predictions to return known metrics
     eval_called = {}
@@ -305,10 +305,10 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
         assert model is dummy_model
         return 0.1234, 0.5678
 
-    monkeypatch.setattr(lstm, "evaluate_and_save_predictions", fake_eval)
+    monkeypatch.setattr(models, "evaluate_and_save_predictions", fake_eval)
 
     # Call the orchestrator
-    test_mse, test_mae, history = lstm.train_and_evaluate_lstm()
+    test_mse, test_mae, history = models.train_and_evaluate_lstm()
 
     # Assertions
     assert load_called.get("called", False)

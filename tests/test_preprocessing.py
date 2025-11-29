@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from finance_lstm import preprocessing
+import src.data_loader as data_loader
 
 
 # --------------------------------------------------------------------------------------
@@ -70,7 +70,7 @@ def test_train_test_split_by_date_happy_path():
     train_end = "2020-01-05"
     test_start = "2020-01-06"
 
-    df_train, df_test = preprocessing.train_test_split_by_date(
+    df_train, df_test = data_loader.train_test_split_by_date(
         df, train_end=train_end, test_start=test_start
     )
 
@@ -90,13 +90,13 @@ def test_train_test_split_by_date_raises_if_empty():
 
     # train_end before all data -> empty train set
     with pytest.raises(RuntimeError):
-        preprocessing.train_test_split_by_date(
+        data_loader.train_test_split_by_date(
             df, train_end="2019-12-31", test_start="2020-01-01"
         )
 
     # test_start after all data -> empty test set
     with pytest.raises(RuntimeError):
-        preprocessing.train_test_split_by_date(
+        data_loader.train_test_split_by_date(
             df, train_end="2020-01-05", test_start="2020-01-06"
         )
 
@@ -127,7 +127,7 @@ def test_scale_features_uses_train_minmax_only():
 
     feature_cols = ["f1", "f2"]
 
-    X_train_scaled, X_test_scaled, scaler = preprocessing.scale_features(
+    X_train_scaled, X_test_scaled, scaler = data_loader.scale_features(
         df_train, df_test, feature_cols
     )
 
@@ -178,7 +178,7 @@ def test_create_sequences_sliding_window():
     y = np.array([10, 11, 12, 13, 14, 15])
 
     lookback = 3
-    X_seq, y_seq = preprocessing.create_sequences(X, y, lookback=lookback)
+    X_seq, y_seq = data_loader.create_sequences(X, y, lookback=lookback)
 
     # number of sequences: len(X) - lookback + 1 = 4
     assert X_seq.shape == (4, lookback, 1)
@@ -217,7 +217,7 @@ def test_prepare_lstm_data_creates_arrays_and_scaler(
 
     # Patch get_default_processed_csv_path to point to our temp file
     monkeypatch.setattr(
-        preprocessing,
+        data_loader,
         "get_default_processed_csv_path",
         lambda: processed_csv,
     )
@@ -225,10 +225,10 @@ def test_prepare_lstm_data_creates_arrays_and_scaler(
     # Patch LSTM_DIR to a temp "lstm" directory
     lstm_dir = tmp_path / "lstm"
     lstm_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(preprocessing, "LSTM_DIR", lstm_dir)
+    monkeypatch.setattr(data_loader, "LSTM_DIR", lstm_dir)
 
     # Use a small lookback for test so shapes are easy to reason about
-    monkeypatch.setattr(preprocessing, "LOOKBACK", 3)
+    monkeypatch.setattr(data_loader, "LOOKBACK", 3)
 
     # Patch the splitter itself so we fully control train/test sizes.
     # Data has 10 rows -> we make:
@@ -239,10 +239,10 @@ def test_prepare_lstm_data_creates_arrays_and_scaler(
         df_test = df_in.iloc[6:].copy()
         return df_train, df_test
 
-    monkeypatch.setattr(preprocessing, "train_test_split_by_date", fake_split)
+    monkeypatch.setattr(data_loader, "train_test_split_by_date", fake_split)
 
     # Run preprocessing
-    preprocessing.prepare_lstm_data()
+    data_loader.prepare_lstm_data()
 
     # Check that all expected files exist
     expected_files = [

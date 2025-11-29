@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from finance_lstm import evaluation
+import src.evaluation as evaluation
 
 
 # --------------------------------------------------------------------------------------

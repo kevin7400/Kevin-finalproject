@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from finance_lstm.models.baselines import evaluate_regression_and_direction
+from src.models import evaluate_regression_and_direction
 
 
 def test_evaluate_regression_and_direction_metrics():

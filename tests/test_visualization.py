@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 
-from finance_lstm.visualization import (
+from src.evaluation import (
     plot_learning_curves,
     plot_confusion_matrix,
     plot_all_confusion_matrices,
@@ -85,10 +85,10 @@ def test_plot_confusion_matrix_with_mismatched_shapes():
 def test_plot_all_confusion_matrices_creates_multiple_files(tmp_path):
     """Test that multiple confusion matrices are created."""
     # Patch RESULTS_DIR to tmp_path
-    from finance_lstm import visualization
+    import src.evaluation as evaluation
 
-    original_results_dir = visualization.RESULTS_DIR
-    visualization.RESULTS_DIR = tmp_path
+    original_results_dir = evaluation.RESULTS_DIR
+    evaluation.RESULTS_DIR = tmp_path
 
     try:
         models_dict = {
@@ -107,15 +107,15 @@ def test_plot_all_confusion_matrices_creates_multiple_files(tmp_path):
         assert (tmp_path / "confusion_matrix_model1.png").exists()
         assert (tmp_path / "confusion_matrix_model2.png").exists()
     finally:
-        visualization.RESULTS_DIR = original_results_dir
+        evaluation.RESULTS_DIR = original_results_dir
 
 
 def test_plot_confusion_matrix_filename_sanitization(tmp_path):
     """Test that model names with spaces are sanitized in filenames."""
-    from finance_lstm import visualization
+    import src.evaluation as evaluation
 
-    original_results_dir = visualization.RESULTS_DIR
-    visualization.RESULTS_DIR = tmp_path
+    original_results_dir = evaluation.RESULTS_DIR
+    evaluation.RESULTS_DIR = tmp_path
 
     try:
         y_true = np.array([0, 1, 0, 1])
@@ -126,4 +126,4 @@ def test_plot_confusion_matrix_filename_sanitization(tmp_path):
         # Should create file with underscores instead of spaces
         assert (tmp_path / "confusion_matrix_random_forest.png").exists()
     finally:
-        visualization.RESULTS_DIR = original_results_dir
+        evaluation.RESULTS_DIR = original_results_dir

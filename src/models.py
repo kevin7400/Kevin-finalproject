@@ -1,12 +1,14 @@
 """
-LSTM model: build, train, and evaluate.
+LSTM and baseline models.
 
-- Uses preprocessed sequences from `data/lstm/` created by `preprocessing.py`.
-- Predicts next-day percentage return (regression).
-- Derives direction (Up/Down) from the sign of the predicted return.
+This module consolidates:
+- LSTM model architecture, training, and evaluation (from models/lstm.py)
+- Baseline models: Linear Regression, Random Forest, XGBoost (from models/baselines.py)
 
-Public helper:
+Public functions:
     - train_and_evaluate_lstm()
+    - train_baseline_models()
+    - evaluate_regression_and_direction()
 """
 
 from __future__ import annotations
@@ -23,23 +25,32 @@ from tensorflow.keras.callbacks import (
     ModelCheckpoint,
     ReduceLROnPlateau,
 )
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import (
+    accuracy_score,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+)
+from xgboost import XGBRegressor
 
-from .. import config
-from ..visualization import plot_learning_curves
+# Import config from data_loader
+from src.data_loader import RANDOM_SEED, LSTM_CONFIG
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
-# src/finance_lstm/models/lstm.py -> src -> project root
-PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[3]
+# src/models.py -> project root
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 LSTM_DIR = DATA_DIR / "lstm"
 LSTM_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# Data loading
+# LSTM: Data loading
 # ---------------------------------------------------------------------------
 
 
@@ -81,7 +92,7 @@ def load_lstm_data() -> Tuple[np.ndarray, ...]:
 
 
 # ---------------------------------------------------------------------------
-# Model definition & training
+# LSTM: Model definition & training
 # ---------------------------------------------------------------------------
 
 
@@ -90,7 +101,7 @@ def build_lstm_model(lookback: int, n_features: int) -> tf.keras.Model:
     Build a Sequential model with stacked LSTM layers and a Dense(1) linear output
     for regression (next-day percentage return).
 
-    Architecture (configurable via config.LSTM_CONFIG):
+    Architecture (configurable via LSTM_CONFIG):
       - Input(shape=(lookback, n_features))
       - LSTM(units1, return_sequences=True)
       - Dropout(dropout)
@@ -98,10 +109,10 @@ def build_lstm_model(lookback: int, n_features: int) -> tf.keras.Model:
       - Dropout(dropout)
       - Dense(1, activation='linear')
     """
-    units1 = config.LSTM_CONFIG["units1"]
-    units2 = config.LSTM_CONFIG["units2"]
-    dropout_rate = config.LSTM_CONFIG["dropout"]
-    learning_rate = config.LSTM_CONFIG["learning_rate"]
+    units1 = LSTM_CONFIG["units1"]
+    units2 = LSTM_CONFIG["units2"]
+    dropout_rate = LSTM_CONFIG["dropout"]
+    learning_rate = LSTM_CONFIG["learning_rate"]
 
     model = Sequential(
         [
@@ -133,8 +144,8 @@ def train_lstm_model(
     """
     Train the LSTM model with early stopping and learning rate reduction.
     """
-    batch_size = config.LSTM_CONFIG["batch_size"]
-    epochs = config.LSTM_CONFIG["epochs"]
+    batch_size = LSTM_CONFIG["batch_size"]
+    epochs = LSTM_CONFIG["epochs"]
 
     callbacks = [
         EarlyStopping(
@@ -172,7 +183,7 @@ def train_lstm_model(
 
 
 # ---------------------------------------------------------------------------
-# Evaluation & prediction saving
+# LSTM: Evaluation & prediction saving
 # ---------------------------------------------------------------------------
 
 
@@ -223,7 +234,7 @@ def evaluate_and_save_predictions(
 
 
 # ---------------------------------------------------------------------------
-# Public entry point for pipeline
+# LSTM: Public entry point
 # ---------------------------------------------------------------------------
 
 
@@ -249,9 +260,9 @@ def train_and_evaluate_lstm() -> tuple[float, float, tf.keras.callbacks.History]
     # Set random seeds for reproducibility
     import random
 
-    random.seed(config.RANDOM_SEED)
-    np.random.seed(config.RANDOM_SEED)
-    tf.random.set_seed(config.RANDOM_SEED)
+    random.seed(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
+    tf.random.set_seed(RANDOM_SEED)
 
     (
         X_train,
@@ -269,7 +280,10 @@ def train_and_evaluate_lstm() -> tuple[float, float, tf.keras.callbacks.History]
 
     history = train_lstm_model(model, X_train, y_train_reg)
 
-    # Generate and save learning curves
+    # Generate and save learning curves (will be called from evaluation module)
+    # Import here to avoid circular dependency
+    from src.evaluation import plot_learning_curves
+
     plot_learning_curves(history)
 
     # Save final model (best one already stored via ModelCheckpoint)
@@ -284,14 +298,71 @@ def train_and_evaluate_lstm() -> tuple[float, float, tf.keras.callbacks.History]
     return test_mse, test_mae, history
 
 
-def main() -> None:
+# ---------------------------------------------------------------------------
+# Baseline Models (from baselines.py)
+# ---------------------------------------------------------------------------
+
+
+def train_baseline_models(X_train: np.ndarray, y_train_reg: np.ndarray):
     """
-    Manual entry point:
+    Train 3 regression baselines:
+      - LinearRegression
+      - RandomForestRegressor
+      - XGBRegressor
 
-        python -m finance_lstm.models.lstm
+    All are trained to predict next_day_return (regression).
+    Direction metrics will be based on the sign of the predicted return.
     """
-    train_and_evaluate_lstm()
+    models = {}
+
+    # Linear baseline
+    lin = LinearRegression()
+    lin.fit(X_train, y_train_reg)
+    models["LinearRegression"] = lin
+
+    # Random Forest baseline
+    rf = RandomForestRegressor(
+        n_estimators=300,
+        max_depth=None,
+        random_state=42,
+        n_jobs=-1,
+    )
+    rf.fit(X_train, y_train_reg)
+    models["RandomForest"] = rf
+
+    # XGBoost baseline
+    xgb = XGBRegressor(
+        n_estimators=500,
+        max_depth=4,
+        learning_rate=0.05,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        objective="reg:squarederror",
+        random_state=42,
+        n_jobs=-1,
+    )
+    xgb.fit(X_train, y_train_reg)
+    models["XGBoost"] = xgb
+
+    return models
 
 
-if __name__ == "__main__":
-    main()
+def evaluate_regression_and_direction(
+    y_true_reg: np.ndarray,
+    y_true_cls: np.ndarray,
+    y_pred_reg: np.ndarray,
+):
+    """
+    Compute RMSE, MAE for regression & Accuracy, F1 for direction, using:
+      - y_pred_reg (continuous %) for magnitude
+      - sign(y_pred_reg) as classification (Up if > 0, else Down)
+    """
+    rmse = float(np.sqrt(mean_squared_error(y_true_reg, y_pred_reg)))
+    mae = float(mean_absolute_error(y_true_reg, y_pred_reg))
+
+    y_pred_dir = (y_pred_reg > 0.0).astype(int)
+
+    acc = float(accuracy_score(y_true_cls, y_pred_dir))
+    f1 = float(f1_score(y_true_cls, y_pred_dir))
+
+    return rmse, mae, acc, f1

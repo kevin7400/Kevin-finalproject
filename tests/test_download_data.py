@@ -2,8 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from finance_lstm import config
-from finance_lstm import download_data
+import src.data_loader as data_loader
 
 
 # --------------------------------------------------------------------------------------
@@ -14,12 +13,12 @@ from finance_lstm import download_data
 def test_get_default_raw_csv_path_uses_config_years():
     """
     The default raw CSV path should incorporate the START_DATE and END_DATE years
-    from config.py in the filename.
+    from data_loader.py in the filename.
     """
-    path = download_data.get_default_raw_csv_path()
+    path = data_loader.get_default_raw_csv_path()
 
-    start_year = config.START_DATE[:4]
-    end_year = config.END_DATE[:4]
+    start_year = data_loader.START_DATE[:4]
+    end_year = data_loader.END_DATE[:4]
     expected_name = f"sp500_{start_year}_{end_year}.csv"
 
     assert path.name == expected_name
@@ -59,9 +58,9 @@ def test_download_sp500_data_success(monkeypatch):
     def fake_yf_download(*args, **kwargs):
         return df_fake
 
-    monkeypatch.setattr(download_data.yf, "download", fake_yf_download)
+    monkeypatch.setattr(data_loader.yf, "download", fake_yf_download)
 
-    out = download_data.download_sp500_data(
+    out = data_loader.download_sp500_data(
         ticker="FAKE",
         start="2020-01-01",
         end="2020-01-03",
@@ -88,10 +87,10 @@ def test_download_sp500_data_empty_raises(monkeypatch):
     def fake_yf_download(*args, **kwargs):
         return pd.DataFrame()
 
-    monkeypatch.setattr(download_data.yf, "download", fake_yf_download)
+    monkeypatch.setattr(data_loader.yf, "download", fake_yf_download)
 
     with pytest.raises(RuntimeError, match="Downloaded DataFrame is empty"):
-        download_data.download_sp500_data(
+        data_loader.download_sp500_data(
             ticker="FAKE",
             start="2020-01-01",
             end="2020-01-03",
@@ -118,10 +117,10 @@ def test_download_sp500_data_missing_ohlcv_raises(monkeypatch):
     def fake_yf_download(*args, **kwargs):
         return df_fake
 
-    monkeypatch.setattr(download_data.yf, "download", fake_yf_download)
+    monkeypatch.setattr(data_loader.yf, "download", fake_yf_download)
 
     with pytest.raises(RuntimeError, match="Missing required OHLCV columns"):
-        download_data.download_sp500_data(
+        data_loader.download_sp500_data(
             ticker="FAKE",
             start="2020-01-01",
             end="2020-01-03",
@@ -148,16 +147,16 @@ def test_download_and_save_raw_data_reuses_existing(tmp_path, monkeypatch):
 
     # Make get_default_raw_csv_path point to our temporary file
     monkeypatch.setattr(
-        download_data, "get_default_raw_csv_path", lambda: fake_csv_path
+        data_loader, "get_default_raw_csv_path", lambda: fake_csv_path
     )
 
     # If this is called, we want to fail the test
     def fake_download_sp500_data(*args, **kwargs):
         raise AssertionError("download_sp500_data should not be called")
 
-    monkeypatch.setattr(download_data, "download_sp500_data", fake_download_sp500_data)
+    monkeypatch.setattr(data_loader, "download_sp500_data", fake_download_sp500_data)
 
-    path = download_data.download_and_save_raw_data(force=False)
+    path = data_loader.download_and_save_raw_data(force=False)
 
     assert path == fake_csv_path
     assert path.exists()
@@ -173,7 +172,7 @@ def test_download_and_save_raw_data_force_download(tmp_path, monkeypatch):
 
     # Make get_default_raw_csv_path point to our temporary file
     monkeypatch.setattr(
-        download_data, "get_default_raw_csv_path", lambda: fake_csv_path
+        data_loader, "get_default_raw_csv_path", lambda: fake_csv_path
     )
 
     # Small fake OHLCV DataFrame
@@ -193,9 +192,9 @@ def test_download_and_save_raw_data_force_download(tmp_path, monkeypatch):
         # We don't care about the arguments too much here, just return the DF
         return df_fake
 
-    monkeypatch.setattr(download_data, "download_sp500_data", fake_download_sp500_data)
+    monkeypatch.setattr(data_loader, "download_sp500_data", fake_download_sp500_data)
 
-    path = download_data.download_and_save_raw_data(force=True)
+    path = data_loader.download_and_save_raw_data(force=True)
 
     assert path == fake_csv_path
     assert path.exists()
