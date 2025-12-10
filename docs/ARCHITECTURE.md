@@ -11,7 +11,7 @@ The goal of the project is to:
 - Train baseline models (Linear, Random Forest, XGBoost).
 - Compare all models on a fixed train/test split.
 
-The code is organized as a **simple 3-file structure** under `src/` with a single end-to-end entry point (`main.py`).
+The code is organized as a **simple 4-file structure** under `src/` with a single end-to-end entry point (`main.py`).
 
 
 ## 1. Directory layout
@@ -36,11 +36,17 @@ From the project root:
     - Computing metrics (RMSE, MAE, Accuracy, F1)
     - Generating visualizations (confusion matrices, learning curves)
     - Model comparison and results export
+  - `hyperparameter_tuning.py` – **Hyperparameter optimization**:
+    - Grid search for baseline models (LinearRegression threshold, RF, XGB)
+    - Random search for LSTM hyperparameters
+    - Class imbalance handling via balanced sample weights
+    - Saving and loading tuned parameters
 
 - `data/`
   - `raw/` – raw OHLCV data downloaded via yfinance.
   - `processed/` – engineered features + targets CSV.
   - `lstm/` – LSTM-ready arrays + scaler + LSTM models + predictions.
+  - `tuning/` – saved hyperparameter tuning results (`best_params.json`).
 
 - `results/` – model comparison CSV and visualization plots.
 
@@ -82,7 +88,17 @@ The system is intentionally linear and modular. At a high level:
      - `X_test_seq.npy`,  `y_test_reg_seq.npy`,  `y_test_cls_seq.npy`
      - `feature_scaler.joblib` in `data/lstm/`.
 
-4. **LSTM training & prediction** (`src.models.train_and_evaluate_lstm()`)
+4. **Hyperparameter tuning** (optional, `src.hyperparameter_tuning.tune_all_models()`)
+   - Uses train/val/test split (train: 2018-2021, val: 2022, test: 2023-2024).
+   - Tunes each model:
+     - LinearRegression: Grid search over classification thresholds.
+     - RandomForest: Grid search over n_estimators, max_depth, min_samples_split.
+     - XGBoost: Grid search over n_estimators, learning_rate, max_depth, gamma.
+     - LSTM: Random search over units, dropout, learning_rate, batch_size.
+   - Uses balanced sample weights for RF and XGB to handle class imbalance.
+   - Saves best parameters to `data/tuning/best_params.json`.
+
+5. **LSTM training & prediction** (`src.models.train_and_evaluate_lstm()`)
    - Loads sequences from `data/lstm/`.
    - Builds a stacked LSTM:
      - Input → `LSTM(units1, return_sequences=True)` → Dropout
@@ -98,7 +114,7 @@ The system is intentionally linear and modular. At a high level:
      - Final model: `lstm_model_final.keras`.
      - Predicted returns / directions: `y_pred_reg_lstm.npy`, `y_pred_dir_lstm.npy`.
 
-5. **Baselines & model comparison** (`src.evaluation.evaluate_all_models()`)
+6. **Baselines & model comparison** (`src.evaluation.evaluate_all_models()`)
    - Reloads processed CSV.
    - Applies same date-based split.
    - Scales features via a new `MinMaxScaler` (this is independent from the LSTM scaler).
@@ -183,24 +199,39 @@ Design choice:
 This keeps the architecture simpler and exactly matches the project requirements.
 
 
-### 3.5. Simplified 3-file structure
+### 3.5. Class imbalance handling
 
-The project uses a **simplified 3-file structure** instead of a complex package hierarchy:
+Stock market data often exhibits class imbalance (e.g., more up days than down days). Without proper handling, models can "game" metrics by always predicting the majority class.
+
+Design choice:
+
+- RandomForest and XGBoost use balanced sample weights during training.
+- Sample weights are computed using `sklearn.utils.class_weight.compute_sample_weight('balanced', y_train_cls)`.
+- This forces models to treat both classes equally, preventing artificially high F1 scores.
+- The LSTM doesn't need this as it's trained on regression (not classification).
+
+This ensures fair and meaningful model comparisons.
+
+
+### 3.6. Simplified 4-file structure
+
+The project uses a **simplified 4-file structure** instead of a complex package hierarchy:
 
 - `src/data_loader.py` – All data-related operations (download, features, preprocessing, configuration)
 - `src/models.py` – All model definitions and training (LSTM and baseline helpers)
 - `src/evaluation.py` – All evaluation, metrics, and visualization
+- `src/hyperparameter_tuning.py` – Hyperparameter optimization for all models
 
 This structure:
 
-- Reduces cognitive overhead (only 3 files to navigate)
+- Reduces cognitive overhead (only 4 files to navigate)
 - Keeps related functionality together
-- Maintains clear separation of concerns (data, models, evaluation)
+- Maintains clear separation of concerns (data, models, evaluation, tuning)
 - Makes the codebase easier to understand and modify
 - Follows common educational/tutorial patterns for ML projects
 
 
-### 3.6. Clear separation of concerns
+### 3.7. Clear separation of concerns
 
 Each module has a narrow responsibility:
 
@@ -216,7 +247,7 @@ This separation makes it easier to:
 - Keep side effects (file IO, downloads) localized.
 
 
-### 3.7. Python package with proper imports
+### 3.8. Python package with proper imports
 
 The project is configured as a Python package:
 
@@ -232,7 +263,7 @@ Advantages:
 - No import confusion between local modules and installed dependencies.
 
 
-### 3.8. Artifacts as first-class outputs
+### 3.9. Artifacts as first-class outputs
 
 Intermediate artifacts are saved to disk at each stage:
 
@@ -240,6 +271,7 @@ Intermediate artifacts are saved to disk at each stage:
 - Processed features/targets (`data/processed`).
 - LSTM-ready arrays + scaler (`data/lstm`).
 - Trained models and predictions (`data/lstm`).
+- Tuned hyperparameters (`data/tuning`).
 - Model comparison table and visualizations (`results/`).
 
 This design enables:
@@ -249,7 +281,7 @@ This design enables:
 - Auditing the exact data that fed each model.
 
 
-### 3.9. Testability
+### 3.10. Testability
 
 Tests are written to:
 
@@ -296,4 +328,5 @@ This architecture tries to balance:
 - Strict, non-leaky ML practices for time series.
 - Ease of configuration and experimentation.
 - Testability and reproducibility.
-- Simplicity through consolidation (3 files instead of 10+).
+- Fair model comparison through class imbalance handling.
+- Simplicity through consolidation (4 files instead of 10+).

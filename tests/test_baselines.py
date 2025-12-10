@@ -19,7 +19,7 @@ def test_evaluate_regression_and_direction_metrics():
     y_true_cls = np.array([0, 1, 0], dtype=int)
     y_pred_reg = np.array([0.1, 0.5, -0.3], dtype=float)
 
-    rmse, mae, acc, f1 = evaluate_regression_and_direction(
+    rmse, mae, acc, f1, precision, recall = evaluate_regression_and_direction(
         y_true_reg=y_true_reg,
         y_true_cls=y_true_cls,
         y_pred_reg=y_pred_reg,
@@ -45,9 +45,11 @@ def test_evaluate_regression_and_direction_metrics():
     #   TP = 1 (idx 1)
     #   FP = 1 (idx 0)
     #   FN = 0
-    # Precision = TP / (TP + FP) = 1 / 2
-    # Recall    = TP / (TP + FN) = 1 / 1 = 1
+    # Precision = TP / (TP + FP) = 1 / 2 = 0.5
+    # Recall    = TP / (TP + FN) = 1 / 1 = 1.0
     # F1        = 2 * P * R / (P + R) = 2 * 0.5 * 1 / (0.5 + 1) = 2/3
     # ------------------------------------------------------------------
     assert acc == pytest.approx(2.0 / 3.0, rel=1e-3)
     assert f1 == pytest.approx(2.0 / 3.0, rel=1e-3)
+    assert precision == pytest.approx(0.5, rel=1e-3)
+    assert recall == pytest.approx(1.0, rel=1e-3)

@@ -174,7 +174,7 @@ def test_evaluate_regression_and_direction_values():
     y_pred_reg = np.array([0.1, 0.5, -0.3], dtype=float)
     y_true_cls = np.array([0, 1, 0], dtype=int)
 
-    rmse, mae, acc, f1 = evaluation.evaluate_regression_and_direction(
+    rmse, mae, acc, f1, precision, recall = evaluation.evaluate_regression_and_direction(
         y_true_reg=y_true_reg,
         y_true_cls=y_true_cls,
         y_pred_reg=y_pred_reg,
@@ -191,6 +191,8 @@ def test_evaluate_regression_and_direction_values():
     # F1 for class 1: precision=1/2, recall=1 -> F1 = 2/3
     assert acc == pytest.approx(2.0 / 3.0, rel=1e-3)
     assert f1 == pytest.approx(2.0 / 3.0, rel=1e-3)
+    assert precision == pytest.approx(0.5, rel=1e-3)
+    assert recall == pytest.approx(1.0, rel=1e-3)
 
 
 # --------------------------------------------------------------------------------------
@@ -200,32 +202,39 @@ def test_evaluate_regression_and_direction_values():
 
 def test_load_lstm_predictions_success(tmp_path):
     """
-    load_lstm_predictions should load all four .npy files,
+    load_lstm_predictions should load all five .npy files,
     check shapes, and return them.
     """
     dir_path = tmp_path
 
+    # Scaled targets (for reference)
     y_test_reg_seq = np.array([0.1, -0.2, 0.3], dtype=float)
+    # Raw targets (for RMSE/MAE metrics)
+    y_test_reg_raw_seq = np.array([0.5, -1.0, 1.5], dtype=float)
     y_test_cls_seq = np.array([1, 0, 1], dtype=int)
-    y_pred_reg_lstm = np.array([0.05, -0.1, 0.2], dtype=float)
+    # Predictions (already inverse transformed to raw scale)
+    y_pred_reg_lstm = np.array([0.4, -0.8, 1.2], dtype=float)
     y_pred_dir_lstm = np.array([1, 0, 1], dtype=int)
 
     np.save(dir_path / "y_test_reg_seq.npy", y_test_reg_seq)
+    np.save(dir_path / "y_test_reg_raw_seq.npy", y_test_reg_raw_seq)
     np.save(dir_path / "y_test_cls_seq.npy", y_test_cls_seq)
     np.save(dir_path / "y_pred_reg_lstm.npy", y_pred_reg_lstm)
     np.save(dir_path / "y_pred_dir_lstm.npy", y_pred_dir_lstm)
 
     (
-        y_reg_loaded,
+        y_reg_raw_loaded,
         y_cls_loaded,
         y_pred_reg_loaded,
         y_pred_dir_loaded,
+        y_reg_scaled_loaded,
     ) = evaluation.load_lstm_predictions(lstm_dir=dir_path)
 
-    assert np.array_equal(y_reg_loaded, y_test_reg_seq)
+    assert np.array_equal(y_reg_raw_loaded, y_test_reg_raw_seq)
     assert np.array_equal(y_cls_loaded, y_test_cls_seq)
     assert np.array_equal(y_pred_reg_loaded, y_pred_reg_lstm)
     assert np.array_equal(y_pred_dir_loaded, y_pred_dir_lstm)
+    assert np.array_equal(y_reg_scaled_loaded, y_test_reg_seq)
 
 
 def test_load_lstm_predictions_missing_files(tmp_path):

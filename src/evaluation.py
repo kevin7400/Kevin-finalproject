@@ -30,6 +30,8 @@ from sklearn.metrics import (
     f1_score,
     mean_absolute_error,
     mean_squared_error,
+    precision_score,
+    recall_score,
 )
 from sklearn.preprocessing import MinMaxScaler
 
@@ -277,6 +279,74 @@ def plot_all_confusion_matrices(
         plot_confusion_matrix(y_true, y_pred, model_name)
 
 
+def plot_metric_comparison_charts(
+    results_df: pd.DataFrame,
+    save_path: pathlib.Path | None = None,
+) -> None:
+    """
+    Create 6 separate bar charts showing all 4 models for each metric.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        DataFrame with columns: model, rmse, mae, accuracy, f1, precision, recall
+    save_path : pathlib.Path | None
+        Path to save the figure. Default: results/metric_comparison_all.png
+    """
+    if save_path is None:
+        save_path = RESULTS_DIR / "metric_comparison_all.png"
+
+    # Define metrics to plot
+    metrics = [
+        ('rmse', 'RMSE (Lower is Better)', 'Reds_r'),
+        ('mae', 'MAE (Lower is Better)', 'Oranges_r'),
+        ('accuracy', 'Accuracy (Higher is Better)', 'Greens'),
+        ('f1', 'F1 Score (Higher is Better)', 'Blues'),
+        ('precision', 'Precision (Higher is Better)', 'Purples'),
+        ('recall', 'Recall (Higher is Better)', 'YlOrBr'),
+    ]
+
+    # Create 2x3 subplot layout
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    axes = axes.flatten()
+
+    # Plot each metric
+    for idx, (metric, title, colormap) in enumerate(metrics):
+        ax = axes[idx]
+
+        # Get data for this metric
+        models = results_df['model'].values
+        values = results_df[metric].values
+
+        # Create bar chart
+        bars = ax.bar(models, values, color=plt.cm.get_cmap(colormap)(0.6))
+
+        # Add value labels on bars
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height,
+                f'{height:.4f}',
+                ha='center',
+                va='bottom',
+                fontsize=9,
+            )
+
+        # Formatting
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_ylabel(metric.upper(), fontsize=10)
+        ax.set_xlabel('Model', fontsize=10)
+        ax.tick_params(axis='x', rotation=45)
+        ax.grid(axis='y', alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"\nMetric comparison charts saved to: {save_path.resolve()}")
+
+
 # ---------------------------------------------------------------------------
 # Evaluation Functions (from evaluation.py)
 # ---------------------------------------------------------------------------
@@ -426,6 +496,9 @@ def prepare_features_and_targets(
     scaler = MinMaxScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
+    # Clip test data to [0, 1] to handle distribution shift (test period may have
+    # values outside training range, e.g., higher stock prices in 2023-2024)
+    X_test_scaled = np.clip(X_test_scaled, 0, 1)
 
     print(
         "X_train_scaled:",
@@ -448,44 +521,49 @@ def evaluate_regression_and_direction(
     y_true_reg: np.ndarray,
     y_true_cls: np.ndarray,
     y_pred_reg: np.ndarray,
-) -> Tuple[float, float, float, float]:
-    """Compute RMSE/MAE for regression and Accuracy/F1 for direction.
+    threshold: float = 0.0,
+) -> Tuple[float, float, float, float, float, float]:
+    """Compute RMSE/MAE for regression and Accuracy/F1/Precision/Recall for direction.
 
     Direction is derived from the sign of y_pred_reg:
-        - y_pred_dir = 1 if y_pred_reg > 0, else 0
+        - y_pred_dir = 1 if y_pred_reg > threshold, else 0
 
     Args:
         y_true_reg: True regression targets (percentage returns).
         y_true_cls: True direction labels (0/1).
         y_pred_reg: Predicted regression values.
+        threshold: Classification threshold for direction (default 0.0).
 
     Returns:
-        A tuple (rmse, mae, accuracy, f1).
+        A tuple (rmse, mae, accuracy, f1, precision, recall).
     """
     rmse = float(np.sqrt(mean_squared_error(y_true_reg, y_pred_reg)))
     mae = float(mean_absolute_error(y_true_reg, y_pred_reg))
 
-    y_pred_dir = (y_pred_reg > 0.0).astype(int)
+    y_pred_dir = (y_pred_reg > threshold).astype(int)
 
     acc = float(accuracy_score(y_true_cls, y_pred_dir))
     f1 = float(f1_score(y_true_cls, y_pred_dir))
+    precision = float(precision_score(y_true_cls, y_pred_dir, zero_division=0))
+    recall = float(recall_score(y_true_cls, y_pred_dir, zero_division=0))
 
-    return rmse, mae, acc, f1
+    return rmse, mae, acc, f1, precision, recall
 
 
 def load_lstm_predictions(
     lstm_dir: pathlib.Path | None = None,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Load LSTM test targets and predictions from disk.
 
     Expects the following files in data/lstm/ (or lstm_dir):
-        - y_test_reg_seq.npy
+        - y_test_reg_seq.npy (scaled targets - for reference)
+        - y_test_reg_raw_seq.npy (raw targets - for RMSE/MAE metrics)
         - y_test_cls_seq.npy
-        - y_pred_reg_lstm.npy
+        - y_pred_reg_lstm.npy (already inverse transformed to raw scale)
         - y_pred_dir_lstm.npy
 
     Returns:
-        A 4-tuple (y_test_reg_seq, y_test_cls_seq, y_pred_reg_lstm, y_pred_dir_lstm).
+        A 5-tuple (y_test_reg_raw_seq, y_test_cls_seq, y_pred_reg_lstm, y_pred_dir_lstm, y_test_reg_seq).
 
     Raises:
         FileNotFoundError: If any required file is missing.
@@ -495,6 +573,7 @@ def load_lstm_predictions(
 
     files = {
         "y_test_reg_seq": dir_path / "y_test_reg_seq.npy",
+        "y_test_reg_raw_seq": dir_path / "y_test_reg_raw_seq.npy",
         "y_test_cls_seq": dir_path / "y_test_cls_seq.npy",
         "y_pred_reg_lstm": dir_path / "y_pred_reg_lstm.npy",
         "y_pred_dir_lstm": dir_path / "y_pred_dir_lstm.npy",
@@ -505,23 +584,25 @@ def load_lstm_predictions(
             raise FileNotFoundError(f"Required LSTM output not found: {path}")
 
     y_test_reg_seq = np.load(files["y_test_reg_seq"])
+    y_test_reg_raw_seq = np.load(files["y_test_reg_raw_seq"])
     y_test_cls_seq = np.load(files["y_test_cls_seq"])
     y_pred_reg_lstm = np.load(files["y_pred_reg_lstm"])
     y_pred_dir_lstm = np.load(files["y_pred_dir_lstm"])
 
     print("\nLSTM arrays loaded:")
-    print("  y_test_reg_seq:", y_test_reg_seq.shape)
+    print("  y_test_reg_seq (scaled):", y_test_reg_seq.shape)
+    print("  y_test_reg_raw_seq:", y_test_reg_raw_seq.shape)
     print("  y_test_cls_seq:", y_test_cls_seq.shape)
     print("  y_pred_reg_lstm:", y_pred_reg_lstm.shape)
     print("  y_pred_dir_lstm:", y_pred_dir_lstm.shape)
 
-    assert y_test_reg_seq.shape == y_pred_reg_lstm.shape
+    assert y_test_reg_raw_seq.shape == y_pred_reg_lstm.shape
     assert y_test_cls_seq.shape == y_pred_dir_lstm.shape
 
-    return y_test_reg_seq, y_test_cls_seq, y_pred_reg_lstm, y_pred_dir_lstm
+    return y_test_reg_raw_seq, y_test_cls_seq, y_pred_reg_lstm, y_pred_dir_lstm, y_test_reg_seq
 
 
-def evaluate_all_models() -> pd.DataFrame:
+def evaluate_all_models(tuned_params: dict = None) -> pd.DataFrame:
     """Train baselines, evaluate them and the LSTM, and save comparison table.
 
     Steps:
@@ -532,6 +613,16 @@ def evaluate_all_models() -> pd.DataFrame:
         5. Compute RMSE/MAE/Accuracy/F1 for each baseline.
         6. Load LSTM predictions and compute the same metrics.
         7. Save the comparison as results/model_comparison.csv.
+
+    Args:
+        tuned_params: Optional dict with tuned hyperparameters for each model.
+            Expected structure:
+            {
+                'LinearRegression': {'best_threshold': float},
+                'RandomForest': {'best_params': dict},
+                'XGBoost': {'best_params': dict},
+                'LSTM': {'best_params': dict}  # Note: LSTM needs retraining separately
+            }
 
     Returns:
         A pandas DataFrame with one row per model and metrics columns.
@@ -548,8 +639,26 @@ def evaluate_all_models() -> pd.DataFrame:
         y_test_cls,
     ) = prepare_features_and_targets(df_train, df_test)
 
-    # Train baselines
-    models = train_baseline_models(X_train_scaled, y_train_reg)
+    # Extract tuned params if provided
+    rf_params = None
+    xgb_params = None
+    lr_threshold = 0.0
+
+    if tuned_params:
+        if 'RandomForest' in tuned_params:
+            rf_params = tuned_params['RandomForest'].get('best_params')
+        if 'XGBoost' in tuned_params:
+            xgb_params = tuned_params['XGBoost'].get('best_params')
+        if 'LinearRegression' in tuned_params:
+            lr_threshold = tuned_params['LinearRegression'].get('best_threshold', 0.0)
+
+    # Train baselines with tuned params (pass y_train_cls for sample weighting)
+    models = train_baseline_models(
+        X_train_scaled, y_train_reg,
+        y_train_cls=y_train_cls,
+        rf_params=rf_params,
+        xgb_params=xgb_params,
+    )
 
     # Align baseline evaluation with LSTM test sequences:
     # LSTM test length = len(df_test) - (LOOKBACK - 1)
@@ -570,8 +679,24 @@ def evaluate_all_models() -> pd.DataFrame:
         y_pred_reg_full = model.predict(X_test_scaled)
         y_pred_reg_eval = y_pred_reg_full[LOOKBACK - 1 :]
 
-        rmse, mae, acc, f1 = evaluate_regression_and_direction(
-            y_test_reg_eval, y_test_cls_eval, y_pred_reg_eval
+        # Use tuned threshold for LinearRegression, 0.0 for others
+        threshold = lr_threshold if name == "LinearRegression" else 0.0
+
+        # DIAGNOSTIC: Check direction distribution
+        y_pred_dir = (y_pred_reg_eval > threshold).astype(int)
+        pct_up_pred = (y_pred_dir == 1).mean() * 100
+        pct_down_pred = (y_pred_dir == 0).mean() * 100
+        pct_up_actual = (y_test_cls_eval == 1).mean() * 100
+        pct_down_actual = (y_test_cls_eval == 0).mean() * 100
+
+        print(f"\n{name} Direction Predictions (threshold={threshold:.4f}):")
+        print(f"  Predicted Up:   {pct_up_pred:.1f}%  ({(y_pred_dir == 1).sum()} samples)")
+        print(f"  Predicted Down: {pct_down_pred:.1f}%  ({(y_pred_dir == 0).sum()} samples)")
+        print(f"  Actual Up:      {pct_up_actual:.1f}%  ({(y_test_cls_eval == 1).sum()} samples)")
+        print(f"  Actual Down:    {pct_down_actual:.1f}%  ({(y_test_cls_eval == 0).sum()} samples)")
+
+        rmse, mae, acc, f1, precision, recall = evaluate_regression_and_direction(
+            y_test_reg_eval, y_test_cls_eval, y_pred_reg_eval, threshold=threshold
         )
 
         rows.append(
@@ -581,21 +706,41 @@ def evaluate_all_models() -> pd.DataFrame:
                 "mae": mae,
                 "accuracy": acc,
                 "f1": f1,
+                "precision": precision,
+                "recall": recall,
             }
         )
 
     # Evaluate LSTM using its own saved predictions
+    # Note: y_test_reg_raw_seq is the raw (unscaled) targets for proper RMSE/MAE calculation
+    # y_pred_reg_lstm is already inverse transformed to raw scale in models.py
     (
-        y_test_reg_seq,
+        y_test_reg_raw_seq,
         y_test_cls_seq,
         y_pred_reg_lstm,
         y_pred_dir_lstm,
+        _,  # y_test_reg_seq (scaled) - not needed for evaluation
     ) = load_lstm_predictions()
 
-    rmse_lstm = float(np.sqrt(mean_squared_error(y_test_reg_seq, y_pred_reg_lstm)))
-    mae_lstm = float(mean_absolute_error(y_test_reg_seq, y_pred_reg_lstm))
+    # DIAGNOSTIC: Check LSTM direction distribution
+    pct_up_pred = (y_pred_dir_lstm == 1).mean() * 100
+    pct_down_pred = (y_pred_dir_lstm == 0).mean() * 100
+    pct_up_actual = (y_test_cls_seq == 1).mean() * 100
+    pct_down_actual = (y_test_cls_seq == 0).mean() * 100
+
+    print(f"\nLSTM Direction Predictions:")
+    print(f"  Predicted Up:   {pct_up_pred:.1f}%  ({(y_pred_dir_lstm == 1).sum()} samples)")
+    print(f"  Predicted Down: {pct_down_pred:.1f}%  ({(y_pred_dir_lstm == 0).sum()} samples)")
+    print(f"  Actual Up:      {pct_up_actual:.1f}%  ({(y_test_cls_seq == 1).sum()} samples)")
+    print(f"  Actual Down:    {pct_down_actual:.1f}%  ({(y_test_cls_seq == 0).sum()} samples)")
+
+    # Use raw targets for RMSE/MAE calculation
+    rmse_lstm = float(np.sqrt(mean_squared_error(y_test_reg_raw_seq, y_pred_reg_lstm)))
+    mae_lstm = float(mean_absolute_error(y_test_reg_raw_seq, y_pred_reg_lstm))
     acc_lstm = float(accuracy_score(y_test_cls_seq, y_pred_dir_lstm))
     f1_lstm = float(f1_score(y_test_cls_seq, y_pred_dir_lstm))
+    precision_lstm = float(precision_score(y_test_cls_seq, y_pred_dir_lstm, zero_division=0))
+    recall_lstm = float(recall_score(y_test_cls_seq, y_pred_dir_lstm, zero_division=0))
 
     rows.append(
         {
@@ -604,6 +749,8 @@ def evaluate_all_models() -> pd.DataFrame:
             "mae": mae_lstm,
             "accuracy": acc_lstm,
             "f1": f1_lstm,
+            "precision": precision_lstm,
+            "recall": recall_lstm,
         }
     )
 
@@ -626,11 +773,12 @@ def evaluate_all_models() -> pd.DataFrame:
     print("\n=== Generating Confusion Matrices ===")
     confusion_data = {}
 
-    # Add baselines
+    # Add baselines (use tuned threshold for LinearRegression, 0.0 for others)
     for name, model in models.items():
         y_pred_reg_full = model.predict(X_test_scaled)
         y_pred_reg_eval = y_pred_reg_full[LOOKBACK - 1 :]
-        y_pred_dir_eval = (y_pred_reg_eval > 0.0).astype(int)
+        threshold = lr_threshold if name == "LinearRegression" else 0.0
+        y_pred_dir_eval = (y_pred_reg_eval > threshold).astype(int)
         confusion_data[name] = (y_test_cls_eval, y_pred_dir_eval)
 
     # Add LSTM
@@ -638,6 +786,9 @@ def evaluate_all_models() -> pd.DataFrame:
 
     # Generate all confusion matrix plots
     plot_all_confusion_matrices(confusion_data)
+
+    # Generate metric comparison bar charts
+    plot_metric_comparison_charts(results_df)
 
     return results_df
 

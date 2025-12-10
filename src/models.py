@@ -16,6 +16,7 @@ from __future__ import annotations
 import pathlib
 from typing import Tuple
 
+import joblib
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Input, Sequential
@@ -33,6 +34,7 @@ from sklearn.metrics import (
     mean_absolute_error,
     mean_squared_error,
 )
+from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBRegressor
 
 # Import config from data_loader
@@ -96,23 +98,42 @@ def load_lstm_data() -> Tuple[np.ndarray, ...]:
 # ---------------------------------------------------------------------------
 
 
-def build_lstm_model(lookback: int, n_features: int) -> tf.keras.Model:
+def build_lstm_model(
+    lookback: int,
+    n_features: int,
+    config: dict = None,
+) -> tf.keras.Model:
     """
     Build a Sequential model with stacked LSTM layers and a Dense(1) linear output
     for regression (next-day percentage return).
 
-    Architecture (configurable via LSTM_CONFIG):
+    Architecture (configurable via config or LSTM_CONFIG):
       - Input(shape=(lookback, n_features))
       - LSTM(units1, return_sequences=True)
       - Dropout(dropout)
       - LSTM(units2)
       - Dropout(dropout)
       - Dense(1, activation='linear')
+
+    Args:
+        lookback: Number of timesteps in input sequence.
+        n_features: Number of features per timestep.
+        config: Optional dict with keys 'units1', 'units2', 'dropout', 'learning_rate'.
+                If None, uses LSTM_CONFIG defaults.
+
+    Returns:
+        Compiled Keras model.
     """
-    units1 = LSTM_CONFIG["units1"]
-    units2 = LSTM_CONFIG["units2"]
-    dropout_rate = LSTM_CONFIG["dropout"]
-    learning_rate = LSTM_CONFIG["learning_rate"]
+    # Merge with defaults
+    cfg = LSTM_CONFIG.copy()
+    if config:
+        cfg.update(config)
+
+    units1 = cfg["units1"]
+    units2 = cfg["units2"]
+    dropout_rate = cfg["dropout"]
+    learning_rate = cfg["learning_rate"]
+    loss_fn = cfg.get("loss", "mse")  # Default to MSE if not specified
 
     model = Sequential(
         [
@@ -127,7 +148,7 @@ def build_lstm_model(lookback: int, n_features: int) -> tf.keras.Model:
 
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-        loss="mse",  # predicting return magnitude (regression)
+        loss=loss_fn,  # configurable: "mse", "mae", "huber"
         metrics=["mae"],
     )
 
@@ -204,33 +225,54 @@ def evaluate_and_save_predictions(
 
     This matches the project requirement:
       "If the predicted percentage return is positive, then Up; else Down."
+
+    Note: The LSTM is trained on scaled targets (StandardScaler), so we must
+    inverse transform predictions before deriving direction and computing
+    metrics on raw percentage returns.
     """
-    # Regression metrics (MSE, MAE)
-    test_loss, test_mae = model.evaluate(X_test, y_test_reg, verbose=1)
-    print(f"\nTest MSE (loss): {test_loss:.4f}")
-    print(f"Test MAE:        {test_mae:.4f}")
+    # Load target scaler for inverse transform
+    target_scaler = joblib.load(LSTM_DIR / "target_scaler.joblib")
 
-    # Predict returns
-    y_pred_reg = model.predict(X_test, verbose=0).flatten()
+    # Load raw test targets for proper RMSE/MAE calculation
+    y_test_reg_raw = np.load(LSTM_DIR / "y_test_reg_raw_seq.npy")
 
-    # Direction derived from sign
+    # Model loss on scaled targets (for consistency with training)
+    test_loss_scaled, test_mae_scaled = model.evaluate(X_test, y_test_reg, verbose=1)
+    print(f"\nTest MSE (scaled): {test_loss_scaled:.4f}")
+    print(f"Test MAE (scaled): {test_mae_scaled:.4f}")
+
+    # Predict scaled returns
+    y_pred_reg_scaled = model.predict(X_test, verbose=0).flatten()
+
+    # Inverse transform to original scale (raw percentage returns)
+    y_pred_reg = target_scaler.inverse_transform(
+        y_pred_reg_scaled.reshape(-1, 1)
+    ).flatten()
+
+    # Compute metrics on raw scale
+    test_mse = float(mean_squared_error(y_test_reg_raw, y_pred_reg))
+    test_mae = float(mean_absolute_error(y_test_reg_raw, y_pred_reg))
+    print(f"\nTest MSE (raw %): {test_mse:.4f}")
+    print(f"Test MAE (raw %): {test_mae:.4f}")
+
+    # Direction derived from sign of raw predictions
     y_pred_dir = (y_pred_reg > 0.0).astype(int)
 
-    # Save predictions for later comparisons (baselines vs LSTM)
+    # Save predictions (in raw scale) for later comparisons (baselines vs LSTM)
     np.save(LSTM_DIR / "y_pred_reg_lstm.npy", y_pred_reg)
     np.save(LSTM_DIR / "y_pred_dir_lstm.npy", y_pred_dir)
 
     print("\nSample of predicted vs true returns (first 5):")
-    for i in range(min(5, len(y_test_reg))):
+    for i in range(min(5, len(y_test_reg_raw))):
         print(
             f"Pred: {y_pred_reg[i]:7.3f} %, "
-            f"True: {y_test_reg[i]:7.3f} %, "
+            f"True: {y_test_reg_raw[i]:7.3f} %, "
             f"Pred_dir: {y_pred_dir[i]}, "
             f"True_dir: {int(y_test_cls[i])}"
         )
 
     print("\nSaved LSTM predictions to:", LSTM_DIR.resolve())
-    return float(test_loss), float(test_mae)
+    return test_mse, test_mae
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +280,7 @@ def evaluate_and_save_predictions(
 # ---------------------------------------------------------------------------
 
 
-def train_and_evaluate_lstm() -> tuple[float, float, tf.keras.callbacks.History]:
+def train_and_evaluate_lstm(config: dict = None) -> tuple[float, float, tf.keras.callbacks.History]:
     """
     Full LSTM workflow:
 
@@ -246,9 +288,12 @@ def train_and_evaluate_lstm() -> tuple[float, float, tf.keras.callbacks.History]
       - Load preprocessed LSTM data from `data/lstm/`
       - Build model based on config + data shape
       - Train model
-      - Generate and save learning curve visualizations
       - Save final model
       - Evaluate on test set and save predictions
+
+    Args:
+        config: Optional dict with LSTM hyperparameters (units1, units2, dropout,
+                learning_rate). If None, uses LSTM_CONFIG defaults.
 
     Returns
     -------
@@ -276,11 +321,11 @@ def train_and_evaluate_lstm() -> tuple[float, float, tf.keras.callbacks.History]
     lookback = X_train.shape[1]
     n_features = X_train.shape[2]
 
-    model = build_lstm_model(lookback=lookback, n_features=n_features)
+    model = build_lstm_model(lookback=lookback, n_features=n_features, config=config)
 
     history = train_lstm_model(model, X_train, y_train_reg)
 
-    # Generate and save learning curves (will be called from evaluation module)
+    # Generate and save learning curves
     # Import here to avoid circular dependency
     from src.evaluation import plot_learning_curves
 
@@ -303,7 +348,14 @@ def train_and_evaluate_lstm() -> tuple[float, float, tf.keras.callbacks.History]
 # ---------------------------------------------------------------------------
 
 
-def train_baseline_models(X_train: np.ndarray, y_train_reg: np.ndarray):
+def train_baseline_models(
+    X_train: np.ndarray,
+    y_train_reg: np.ndarray,
+    y_train_cls: np.ndarray = None,
+    rf_params: dict = None,
+    xgb_params: dict = None,
+    use_sample_weights: bool = True,
+):
     """
     Train 3 regression baselines:
       - LinearRegression
@@ -312,36 +364,66 @@ def train_baseline_models(X_train: np.ndarray, y_train_reg: np.ndarray):
 
     All are trained to predict next_day_return (regression).
     Direction metrics will be based on the sign of the predicted return.
+
+    Args:
+        X_train: Training features.
+        y_train_reg: Training regression targets.
+        y_train_cls: Training classification targets (0/1 direction).
+                     Used to compute sample weights for class balancing.
+        rf_params: Optional dict of RandomForest hyperparameters.
+        xgb_params: Optional dict of XGBoost hyperparameters.
+        use_sample_weights: If True and y_train_cls provided, use balanced
+                           sample weights to prevent class imbalance exploitation.
+
+    Returns:
+        Dict mapping model name to fitted model.
     """
     models = {}
 
-    # Linear baseline
+    # Compute sample weights if class labels provided
+    # This prevents models from gaming F1 by always predicting the majority class
+    if use_sample_weights and y_train_cls is not None:
+        sample_weight = compute_sample_weight('balanced', y_train_cls)
+        print(f"Using balanced sample weights (Down weight: {sample_weight[y_train_cls == 0].mean():.3f}, "
+              f"Up weight: {sample_weight[y_train_cls == 1].mean():.3f})")
+    else:
+        sample_weight = None
+
+    # Linear baseline (no sample weights - too simple to benefit)
     lin = LinearRegression()
     lin.fit(X_train, y_train_reg)
     models["LinearRegression"] = lin
 
-    # Random Forest baseline
-    rf = RandomForestRegressor(
-        n_estimators=300,
-        max_depth=None,
-        random_state=42,
-        n_jobs=-1,
-    )
-    rf.fit(X_train, y_train_reg)
+    # Random Forest baseline with sample weights
+    rf_defaults = {
+        'n_estimators': 300,
+        'max_depth': None,
+        'min_samples_split': 2,
+        'random_state': 42,
+        'n_jobs': -1,
+    }
+    if rf_params:
+        rf_defaults.update(rf_params)
+    rf = RandomForestRegressor(**rf_defaults)
+    rf.fit(X_train, y_train_reg, sample_weight=sample_weight)
     models["RandomForest"] = rf
 
-    # XGBoost baseline
-    xgb = XGBRegressor(
-        n_estimators=500,
-        max_depth=4,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        objective="reg:squarederror",
-        random_state=42,
-        n_jobs=-1,
-    )
-    xgb.fit(X_train, y_train_reg)
+    # XGBoost baseline with sample weights
+    xgb_defaults = {
+        'n_estimators': 500,
+        'max_depth': 4,
+        'learning_rate': 0.05,
+        'gamma': 0,
+        'subsample': 0.8,
+        'colsample_bytree': 0.8,
+        'objective': 'reg:squarederror',
+        'random_state': 42,
+        'n_jobs': -1,
+    }
+    if xgb_params:
+        xgb_defaults.update(xgb_params)
+    xgb = XGBRegressor(**xgb_defaults)
+    xgb.fit(X_train, y_train_reg, sample_weight=sample_weight)
     models["XGBoost"] = xgb
 
     return models
@@ -353,7 +435,7 @@ def evaluate_regression_and_direction(
     y_pred_reg: np.ndarray,
 ):
     """
-    Compute RMSE, MAE for regression & Accuracy, F1 for direction, using:
+    Compute RMSE, MAE for regression & Accuracy, F1, Precision, Recall for direction, using:
       - y_pred_reg (continuous %) for magnitude
       - sign(y_pred_reg) as classification (Up if > 0, else Down)
     """
@@ -365,4 +447,8 @@ def evaluate_regression_and_direction(
     acc = float(accuracy_score(y_true_cls, y_pred_dir))
     f1 = float(f1_score(y_true_cls, y_pred_dir))
 
-    return rmse, mae, acc, f1
+    from sklearn.metrics import precision_score, recall_score
+    precision = float(precision_score(y_true_cls, y_pred_dir, zero_division=0))
+    recall = float(recall_score(y_true_cls, y_pred_dir, zero_division=0))
+
+    return rmse, mae, acc, f1, precision, recall

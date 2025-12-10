@@ -1,0 +1,35 @@
+{
+  "LinearRegression": {
+    "best_threshold": -0.45,
+    "best_f1": 0.5921450151057401
+  },
+  "RandomForest": {
+    "best_params": {
+      "n_estimators": 200,
+      "max_depth": null,
+      "min_samples_split": 10
+    },
+    "best_f1": 0.5551601423487544
+  },
+  "XGBoost": {
+    "best_params": {
+      "n_estimators": 700,
+      "learning_rate": 0.05,
+      "max_depth": 6,
+      "gamma": 0
+    },
+    "best_f1": 0.5512367491166078
+  },
+  "LSTM": {
+    "best_params": {
+      "units1": 64,
+      "units2": 32,
+      "dropout": 0.2,
+      "learning_rate": 0.001,
+      "batch_size": 32,
+      "loss": "mse",
+      "epochs": 50
+    },
+    "best_f1": 0.6401
+  }
+}

@@ -7,12 +7,15 @@ This script orchestrates the full pipeline:
     1. Download raw OHLCV data via yfinance
     2. Build 12 technical indicators + 2 targets
     3. Preprocess data into LSTM-ready sequences
+    3.5. (Optional) Hyperparameter tuning
     4. Train and evaluate LSTM model
     5. Train baseline models and compare results
 
 Usage (from project root):
 
-    python main.py
+    python main.py                    # Standard run (uses tuned params by default)
+    python main.py --tune             # Run hyperparameter tuning (~35 min)
+    python main.py --no-tuned         # Run with default parameters instead of tuned
 
 Or with conda:
 
@@ -82,6 +85,8 @@ def ensure_venv() -> None:
 def run_pipeline(
     force_download: bool = False,
     rebuild_features: bool = True,
+    run_tuning: bool = False,
+    use_tuned_params: bool = False,
 ) -> pd.DataFrame:
     """Run the full end-to-end pipeline.
 
@@ -92,10 +97,16 @@ def run_pipeline(
         rebuild_features:
             If True, recompute indicators + targets and overwrite the processed CSV.
             If False, reuse the existing processed CSV (if present).
+        run_tuning:
+            If True, run hyperparameter tuning before final training.
+            This takes ~35 minutes but finds optimal hyperparameters.
+        use_tuned_params:
+            If True, load previously saved tuned params from data/tuning/best_params.json.
+            Ignored if run_tuning is True.
 
     Returns:
         A pandas DataFrame with one row per model (LSTM + baselines)
-        and the metrics columns: rmse, mae, accuracy, f1.
+        and the metrics columns: rmse, mae, accuracy, f1, precision, recall.
     """
     print("\n=== STEP 1: Download raw data ===")
     raw_path = download_and_save_raw_data(force=force_download)
@@ -110,12 +121,34 @@ def run_pipeline(
     print("\n=== STEP 3: Preprocess data for LSTM ===")
     prepare_lstm_data()
 
+    # Hyperparameter tuning (optional)
+    tuned_params = None
+    lstm_config = None
+
+    if run_tuning:
+        print("\n=== STEP 3.5: Hyperparameter Tuning ===")
+        from src.hyperparameter_tuning import tune_all_models
+        tuned_params = tune_all_models()
+        if 'LSTM' in tuned_params and tuned_params['LSTM'].get('best_params'):
+            lstm_config = tuned_params['LSTM']['best_params']
+    elif use_tuned_params:
+        print("\n=== STEP 3.5: Loading Tuned Parameters ===")
+        from src.hyperparameter_tuning import load_best_params
+        try:
+            tuned_params = load_best_params()
+            print(f"Loaded tuned params: {list(tuned_params.keys())}")
+            if 'LSTM' in tuned_params and tuned_params['LSTM'].get('best_params'):
+                lstm_config = tuned_params['LSTM']['best_params']
+        except FileNotFoundError as e:
+            print(f"Warning: {e}")
+            print("Running with default parameters.")
+
     print("\n=== STEP 4: Train and evaluate LSTM ===")
-    test_mse, test_mae, history = train_and_evaluate_lstm()
+    test_mse, test_mae, history = train_and_evaluate_lstm(config=lstm_config)
     print(f"\nLSTM test metrics: MSE={test_mse:.4f}, MAE={test_mae:.4f}")
 
     print("\n=== STEP 5: Evaluate baselines + LSTM ===")
-    results_df = evaluate_all_models()
+    results_df = evaluate_all_models(tuned_params=tuned_params)
 
     print("\n=== PIPELINE COMPLETED SUCCESSFULLY ===")
     print(f"  Raw CSV:       {raw_path}")
@@ -129,14 +162,50 @@ def run_pipeline(
         f"  Train period:  {START_DATE} -> {TRAIN_END} "
         f"| Test period: {TEST_START} -> {END_DATE}"
     )
+    if tuned_params:
+        print(f"  Tuned params:  data/tuning/best_params.json")
 
     return results_df
 
 
 def main() -> None:
     """Main entry point."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="S&P 500 LSTM Stock Prediction Pipeline"
+    )
+    parser.add_argument(
+        "--tune",
+        action="store_true",
+        help="Run hyperparameter tuning (~35 min)",
+    )
+    parser.add_argument(
+        "--use-tuned",
+        action="store_true",
+        default=True,
+        help="Use previously saved tuned parameters (default: True)",
+    )
+    parser.add_argument(
+        "--no-tuned",
+        action="store_true",
+        help="Disable using tuned parameters (use defaults instead)",
+    )
+    parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Force re-download of raw data",
+    )
+    args = parser.parse_args()
+
     ensure_venv()
-    run_pipeline()
+    # --no-tuned overrides --use-tuned
+    use_tuned = args.use_tuned and not args.no_tuned
+    run_pipeline(
+        force_download=args.force_download,
+        run_tuning=args.tune,
+        use_tuned_params=use_tuned,
+    )
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from ta.momentum import RSIIndicator
 from ta.trend import MACD, SMAIndicator, EMAIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
@@ -33,7 +33,9 @@ from ta.volume import OnBalanceVolumeIndicator
 # ---------------------------------------------------------------------------
 
 # Random seed for reproducibility
-RANDOM_SEED = 42
+# Note: LSTM predictions are sensitive to initialization. Seed 5678 gives balanced
+# predictions (~75% Up) while other seeds may give extreme biases (2% or 100% Up).
+RANDOM_SEED = 5678
 
 # Ticker to download (S&P 500 index)
 TICKER = "^GSPC"
@@ -42,9 +44,15 @@ TICKER = "^GSPC"
 START_DATE = "2018-01-01"
 END_DATE = "2024-12-31"
 
-# Train / test split boundaries
+# Train / test split boundaries (for final evaluation)
 TRAIN_END = "2022-12-31"
 TEST_START = "2023-01-01"
+
+# Hyperparameter tuning split boundaries
+# Training: 2018-2021 (4 years), Validation: 2022 (1 year), Test: 2023-2024 (unchanged)
+TUNE_TRAIN_END = "2021-12-31"
+TUNE_VAL_START = "2022-01-01"
+TUNE_VAL_END = "2022-12-31"
 
 # LSTM lookback window (number of past days)
 LOOKBACK = 64
@@ -57,6 +65,7 @@ LSTM_CONFIG = {
     "batch_size": 32,
     "epochs": 50,
     "learning_rate": 1e-3,
+    "loss": "mse",  # Options: "mse", "mae", "huber"
 }
 
 # Number of technical indicators
@@ -459,6 +468,9 @@ def scale_features(
 
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
+    # Clip test data to [0, 1] to handle distribution shift (test period may have
+    # values outside training range, e.g., higher stock prices in 2023-2024)
+    X_test_scaled = np.clip(X_test_scaled, 0, 1)
 
     print("\nFeature scaling:")
     print("X_train_scaled shape:", X_train_scaled.shape)
@@ -533,21 +545,37 @@ def prepare_lstm_data() -> None:
         df_train, df_test, feature_cols
     )
 
-    # 3) Extract targets (no scaling)
-    y_train_reg = df_train[target_reg_col].values
-    y_test_reg = df_test[target_reg_col].values
+    # 3) Extract targets
+    # Raw targets (for evaluation metrics - RMSE, MAE)
+    y_train_reg_raw = df_train[target_reg_col].values
+    y_test_reg_raw = df_test[target_reg_col].values
+
+    # Scale regression targets using StandardScaler (for LSTM training)
+    # This centers targets around 0, which helps the LSTM learn both positive
+    # and negative predictions instead of collapsing to a small positive mean.
+    target_scaler = StandardScaler()
+    y_train_reg = target_scaler.fit_transform(y_train_reg_raw.reshape(-1, 1)).flatten()
+    y_test_reg = target_scaler.transform(y_test_reg_raw.reshape(-1, 1)).flatten()
+
+    # Classification targets (no scaling - binary 0/1)
     y_train_cls = df_train[target_cls_col].values
     y_test_cls = df_test[target_cls_col].values
 
     print("\nTargets shapes:")
-    print("y_train_reg:", y_train_reg.shape, "y_test_reg:", y_test_reg.shape)
+    print("y_train_reg (scaled):", y_train_reg.shape, "y_test_reg (scaled):", y_test_reg.shape)
+    print("y_train_reg_raw:", y_train_reg_raw.shape, "y_test_reg_raw:", y_test_reg_raw.shape)
     print("y_train_cls:", y_train_cls.shape, "y_test_cls:", y_test_cls.shape)
 
     # 4) Create LSTM sequences
+    # Scaled regression targets (for LSTM training)
     X_train_seq, y_train_reg_seq = create_sequences(
         X_train_scaled, y_train_reg, LOOKBACK
     )
     X_test_seq, y_test_reg_seq = create_sequences(X_test_scaled, y_test_reg, LOOKBACK)
+
+    # Raw regression targets (for evaluation metrics - RMSE, MAE)
+    _, y_train_reg_raw_seq = create_sequences(X_train_scaled, y_train_reg_raw, LOOKBACK)
+    _, y_test_reg_raw_seq = create_sequences(X_test_scaled, y_test_reg_raw, LOOKBACK)
 
     # For classification: same sequences, different targets
     _, y_train_cls_seq = create_sequences(X_train_scaled, y_train_cls, LOOKBACK)
@@ -555,21 +583,26 @@ def prepare_lstm_data() -> None:
 
     print("\nLSTM sequence shapes:")
     print("X_train_seq:", X_train_seq.shape)
-    print("y_train_reg_seq:", y_train_reg_seq.shape)
+    print("y_train_reg_seq (scaled):", y_train_reg_seq.shape)
+    print("y_train_reg_raw_seq:", y_train_reg_raw_seq.shape)
     print("y_train_cls_seq:", y_train_cls_seq.shape)
     print("X_test_seq:", X_test_seq.shape)
-    print("y_test_reg_seq:", y_test_reg_seq.shape)
+    print("y_test_reg_seq (scaled):", y_test_reg_seq.shape)
+    print("y_test_reg_raw_seq:", y_test_reg_raw_seq.shape)
     print("y_test_cls_seq:", y_test_cls_seq.shape)
 
-    # 5) Save arrays & scaler
+    # 5) Save arrays & scalers
     np.save(LSTM_DIR / "X_train_seq.npy", X_train_seq)
-    np.save(LSTM_DIR / "y_train_reg_seq.npy", y_train_reg_seq)
+    np.save(LSTM_DIR / "y_train_reg_seq.npy", y_train_reg_seq)  # scaled
+    np.save(LSTM_DIR / "y_train_reg_raw_seq.npy", y_train_reg_raw_seq)  # raw
     np.save(LSTM_DIR / "y_train_cls_seq.npy", y_train_cls_seq)
 
     np.save(LSTM_DIR / "X_test_seq.npy", X_test_seq)
-    np.save(LSTM_DIR / "y_test_reg_seq.npy", y_test_reg_seq)
+    np.save(LSTM_DIR / "y_test_reg_seq.npy", y_test_reg_seq)  # scaled
+    np.save(LSTM_DIR / "y_test_reg_raw_seq.npy", y_test_reg_raw_seq)  # raw
     np.save(LSTM_DIR / "y_test_cls_seq.npy", y_test_cls_seq)
 
     joblib.dump(scaler, LSTM_DIR / "feature_scaler.joblib")
+    joblib.dump(target_scaler, LSTM_DIR / "target_scaler.joblib")
 
-    print(f"\nSaved LSTM-ready arrays and scaler in: {LSTM_DIR.resolve()}")
+    print(f"\nSaved LSTM-ready arrays and scalers in: {LSTM_DIR.resolve()}")

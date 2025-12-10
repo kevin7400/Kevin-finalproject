@@ -172,11 +172,29 @@ def test_train_lstm_model_runs_one_epoch(monkeypatch, tmp_path: pathlib.Path):
 def test_evaluate_and_save_predictions_saves_npy(monkeypatch, tmp_path: pathlib.Path):
     """
     evaluate_and_save_predictions should:
+      - load target_scaler and inverse transform predictions
       - call model.evaluate and model.predict
       - save y_pred_reg_models.npy and y_pred_dir_models.npy under LSTM_DIR
-      - return (test_loss, test_mae) as floats.
+      - return (test_mse, test_mae) computed on raw targets.
     """
+    import joblib
+    from sklearn.preprocessing import StandardScaler
+
     monkeypatch.setattr(models, "LSTM_DIR", tmp_path)
+
+    # Create a target scaler that was "fitted" on some training data
+    # For simplicity, we'll use a scaler that was fit on data with mean=0, std=0.5
+    # so inverse_transform(x) = x * 0.5 + 0 = x * 0.5
+    target_scaler = StandardScaler()
+    target_scaler.mean_ = np.array([0.0])
+    target_scaler.scale_ = np.array([0.5])
+    target_scaler.var_ = np.array([0.25])
+    target_scaler.n_features_in_ = 1
+    joblib.dump(target_scaler, tmp_path / "target_scaler.joblib")
+
+    # Create raw test targets
+    y_test_reg_raw = np.array([0.05, -0.1, 0.0], dtype="float32")
+    np.save(tmp_path / "y_test_reg_raw_seq.npy", y_test_reg_raw)
 
     # Simple deterministic "model"
     class DummyModel:
@@ -186,30 +204,35 @@ def test_evaluate_and_save_predictions_saves_npy(monkeypatch, tmp_path: pathlib.
 
         def evaluate(self, X, y, verbose=1):
             self.evaluate_called = True
-            # Return fixed loss/mae to check passthrough
+            # Return fixed loss/mae for scaled targets (won't be used in final output)
             return 0.25, 0.5
 
         def predict(self, X, verbose=0):
             self.predict_called = True
-            # 3 samples, arbitrary values
-            return np.array([[0.1], [-0.2], [0.0]], dtype="float32")
+            # 3 samples, scaled predictions
+            # These will be inverse transformed: [0.2, -0.4, 0.0] * 0.5 = [0.1, -0.2, 0.0]
+            return np.array([[0.2], [-0.4], [0.0]], dtype="float32")
 
     dummy = DummyModel()
 
     X_test = np.zeros((3, 4, 2), dtype="float32")
-    y_test_reg = np.array([0.05, -0.1, 0.0], dtype="float32")
+    y_test_reg = np.array([0.1, -0.2, 0.0], dtype="float32")  # scaled targets
     y_test_cls = np.array([1, 0, 0], dtype="int64")
 
-    test_loss, test_mae = models.evaluate_and_save_predictions(
+    test_mse, test_mae = models.evaluate_and_save_predictions(
         dummy, X_test, y_test_reg, y_test_cls
     )
 
     assert dummy.evaluate_called
     assert dummy.predict_called
 
-    # Returned metrics match dummy values
-    assert test_loss == pytest.approx(0.25)
-    assert test_mae == pytest.approx(0.5)
+    # Returned metrics are computed on raw targets vs inverse-transformed predictions
+    # Expected predictions after inverse transform: [0.1, -0.2, 0.0]
+    # Raw targets: [0.05, -0.1, 0.0]
+    # MSE = mean((0.1-0.05)^2 + (-0.2-(-0.1))^2 + (0-0)^2) = mean(0.0025 + 0.01 + 0) = 0.00417
+    # MAE = mean(|0.05| + |0.1| + |0|) = 0.05
+    assert test_mse == pytest.approx(0.00417, rel=0.01)
+    assert test_mae == pytest.approx(0.05, rel=0.01)
 
     # Files saved
     pred_reg_path = tmp_path / "y_pred_reg_lstm.npy"
@@ -220,11 +243,11 @@ def test_evaluate_and_save_predictions_saves_npy(monkeypatch, tmp_path: pathlib.
     y_pred_reg = np.load(pred_reg_path)
     y_pred_dir = np.load(pred_dir_path)
 
-    # Predictions exactly what DummyModel produced
-    np.testing.assert_array_equal(
-        y_pred_reg, np.array([0.1, -0.2, 0.0], dtype="float32")
+    # Predictions are inverse transformed: [0.2, -0.4, 0.0] * 0.5 = [0.1, -0.2, 0.0]
+    np.testing.assert_array_almost_equal(
+        y_pred_reg, np.array([0.1, -0.2, 0.0], dtype="float32"), decimal=5
     )
-    # Direction from sign (>0 -> 1, else 0)
+    # Direction from sign of raw predictions (>0 -> 1, else 0)
     np.testing.assert_array_equal(y_pred_dir, np.array([1, 0, 0], dtype="int64"))
 
 
@@ -267,8 +290,9 @@ def test_train_and_evaluate_lstm_orchestrates(monkeypatch, tmp_path: pathlib.Pat
     dummy_model = DummyModel()
     build_called = {}
 
-    def fake_build(lookback: int, n_features: int):
+    def fake_build(lookback: int, n_features: int, config: dict = None):
         build_called["args"] = (lookback, n_features)
+        build_called["config"] = config
         return dummy_model
 
     monkeypatch.setattr(models, "build_lstm_model", fake_build)

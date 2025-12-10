@@ -139,12 +139,12 @@ def test_scale_features_uses_train_minmax_only():
         atol=1e-6,
     )
 
-    # Test scaling should use same train min/max:
-    #   f1 = 20 -> (20 - 0) / (10 - 0) = 2
-    #   f2 = 25 -> (25 - 5) / (15 - 5) = 2
+    # Test scaling uses same train min/max, then clips to [0, 1]:
+    #   f1 = 20 -> (20 - 0) / (10 - 0) = 2 -> clipped to 1
+    #   f2 = 25 -> (25 - 5) / (15 - 5) = 2 -> clipped to 1
     np.testing.assert_allclose(
         X_test_scaled,
-        np.array([[2.0, 2.0]]),
+        np.array([[1.0, 1.0]]),
         rtol=1e-6,
         atol=1e-6,
     )
@@ -247,12 +247,15 @@ def test_prepare_lstm_data_creates_arrays_and_scaler(
     # Check that all expected files exist
     expected_files = [
         "X_train_seq.npy",
-        "y_train_reg_seq.npy",
+        "y_train_reg_seq.npy",  # scaled targets
+        "y_train_reg_raw_seq.npy",  # raw targets for evaluation
         "y_train_cls_seq.npy",
         "X_test_seq.npy",
-        "y_test_reg_seq.npy",
+        "y_test_reg_seq.npy",  # scaled targets
+        "y_test_reg_raw_seq.npy",  # raw targets for evaluation
         "y_test_cls_seq.npy",
         "feature_scaler.joblib",
+        "target_scaler.joblib",  # StandardScaler for regression targets
     ]
     for name in expected_files:
         assert (lstm_dir / name).exists(), f"Missing expected file: {name}"
