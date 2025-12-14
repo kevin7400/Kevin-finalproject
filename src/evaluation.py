@@ -803,12 +803,45 @@ def evaluate_all_models(tuned_params: dict = None) -> pd.DataFrame:
     print("\n=== Generating Confusion Matrices ===")
     confusion_data = {}
 
-    # Add baselines (use tuned threshold for LinearRegression, 0.0 for others)
+    # Add baselines with correct tuned thresholds for each model
     for name, model in models.items():
         y_pred_reg_full = model.predict(X_test_scaled)
         y_pred_reg_eval = y_pred_reg_full[LOOKBACK - 1 :]
-        threshold = lr_threshold if name == "LinearRegression" else 0.0
+
+        # Use correct threshold for each model (must match metrics computation)
+        if name == "LinearRegression":
+            threshold = lr_threshold
+        elif name == "RandomForest":
+            threshold = rf_threshold
+        elif name == "XGBoost":
+            threshold = xgb_threshold
+        else:
+            threshold = 0.0
+
         y_pred_dir_eval = (y_pred_reg_eval > threshold).astype(int)
+
+        # DIAGNOSTIC: Verify consistency between metrics and confusion matrix
+        print(f"\n--- {name} Confusion Matrix Diagnostics ---")
+        print(f"  y_test hash (first 20): {y_test_cls_eval[:20].tolist()}")
+        print(f"  y_test shape: {y_test_cls_eval.shape}, y_pred shape: {y_pred_dir_eval.shape}")
+        print(
+            f"  y_test class counts: Down={np.sum(y_test_cls_eval == 0)}, "
+            f"Up={np.sum(y_test_cls_eval == 1)}"
+        )
+        print(
+            f"  y_pred class counts: Down={np.sum(y_pred_dir_eval == 0)}, "
+            f"Up={np.sum(y_pred_dir_eval == 1)}"
+        )
+        print(f"  Threshold used: {threshold}")
+
+        # Recompute metrics to verify consistency with model_comparison.csv
+        cm = confusion_matrix(y_test_cls_eval, y_pred_dir_eval)
+        acc_check = accuracy_score(y_test_cls_eval, y_pred_dir_eval)
+        f1_check = f1_score(y_test_cls_eval, y_pred_dir_eval)
+        print(f"  Confusion matrix:\n{cm}")
+        print(f"  Accuracy (recomputed): {acc_check:.6f}")
+        print(f"  F1 (recomputed): {f1_check:.6f}")
+
         confusion_data[name] = (y_test_cls_eval, y_pred_dir_eval)
 
     # Add LSTM
@@ -825,4 +858,12 @@ def evaluate_all_models(tuned_params: dict = None) -> pd.DataFrame:
 
 if __name__ == "__main__":
     # Allow running this module directly for debugging.
-    evaluate_all_models()
+    # Load tuned params if available
+    import json
+    tuning_params_path = DATA_DIR / "tuning" / "best_params.json"
+    tuned_params = None
+    if tuning_params_path.exists():
+        with open(tuning_params_path) as f:
+            tuned_params = json.load(f)
+        print(f"Loaded tuned params from: {tuning_params_path}")
+    evaluate_all_models(tuned_params=tuned_params)

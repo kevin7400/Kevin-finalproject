@@ -24,14 +24,14 @@
   },
   "LSTMClassifier": {
     "best_params": {
-      "units1": 32,
-      "units2": 64,
-      "dropout": 0.3,
-      "learning_rate": 0.0005,
-      "batch_size": 16,
+      "units1": 128,
+      "units2": 32,
+      "dropout": 0.1,
+      "learning_rate": 0.001,
+      "batch_size": 64,
       "epochs": 50
     },
-    "best_threshold": 0.3,
-    "best_f1": 0.5917602996254682
+    "best_threshold": 0.43999999999999995,
+    "best_f1": 0.6040816326530613
   }
 }
