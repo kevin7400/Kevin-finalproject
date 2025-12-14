@@ -20,7 +20,7 @@ from typing import Tuple
 import joblib
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import Input, Sequential
+from tensorflow.keras import Input, Sequential, Model
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import (
     EarlyStopping,
@@ -34,6 +34,8 @@ from sklearn.metrics import (
     f1_score,
     mean_absolute_error,
     mean_squared_error,
+    precision_score,
+    recall_score,
 )
 from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBRegressor
@@ -217,6 +219,81 @@ def build_lstm_classifier(
     return model
 
 
+def build_lstm_multitask(
+    lookback: int,
+    n_features: int,
+    config: dict = None,
+) -> tf.keras.Model:
+    """
+    Build a multitask LSTM with shared trunk and two output heads.
+
+    This model learns both return magnitude (regression) and direction
+    (classification) jointly using a shared representation.
+
+    Architecture:
+        Input -> LSTM(units1) -> Dropout -> LSTM(units2) -> Dropout
+                            |
+                    +-------+-------+
+                    |               |
+                Dense(1)        Dense(1)
+                linear          sigmoid
+                return_out      dir_out
+
+    Args:
+        lookback: Number of timesteps in input sequence.
+        n_features: Number of features per timestep.
+        config: Optional dict with keys 'units1', 'units2', 'dropout', 'learning_rate',
+                'alpha_return' (loss weight for return head, default 0.5).
+
+    Returns:
+        Compiled Keras model with two outputs.
+    """
+    # Merge with defaults
+    cfg = LSTM_CONFIG.copy()
+    if config:
+        cfg.update(config)
+
+    units1 = cfg["units1"]
+    units2 = cfg["units2"]
+    dropout_rate = cfg["dropout"]
+    learning_rate = cfg["learning_rate"]
+    alpha_return = cfg.get("alpha_return", 0.5)  # Loss weight for return head
+
+    # Shared trunk using Functional API
+    inputs = Input(shape=(lookback, n_features), name="input")
+    x = LSTM(units1, return_sequences=True, name="lstm1")(inputs)
+    x = Dropout(dropout_rate, name="dropout1")(x)
+    x = LSTM(units2, name="lstm2")(x)
+    x = Dropout(dropout_rate, name="dropout2")(x)
+
+    # Regression head (returns)
+    return_out = Dense(1, activation="linear", name="return_out")(x)
+
+    # Classification head (direction)
+    dir_out = Dense(1, activation="sigmoid", name="dir_out")(x)
+
+    model = Model(inputs=inputs, outputs=[return_out, dir_out], name="lstm_multitask")
+
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
+        loss={
+            "return_out": "mse",
+            "dir_out": "binary_crossentropy",
+        },
+        loss_weights={
+            "return_out": alpha_return,
+            "dir_out": 1.0 - alpha_return,
+        },
+        metrics={
+            "return_out": ["mae"],
+            "dir_out": ["accuracy"],
+        },
+    )
+
+    model.summary()
+    return model
+
+
 def train_lstm_classifier(
     model: tf.keras.Model,
     X_train: np.ndarray,
@@ -279,6 +356,87 @@ def train_lstm_classifier(
         batch_size=batch_size,
         callbacks=callbacks,
         class_weight=class_weight_dict,
+        verbose=1,
+        shuffle=False,  # respect temporal order
+    )
+
+    return history
+
+
+def train_lstm_multitask(
+    model: tf.keras.Model,
+    X_train: np.ndarray,
+    y_train_reg: np.ndarray,
+    y_train_cls: np.ndarray,
+    config: dict = None,
+    val_split: float = 0.2,
+    use_class_weights: bool = True,
+) -> tf.keras.callbacks.History:
+    """
+    Train the multitask LSTM with balanced sample weights for direction head.
+
+    Args:
+        model: Compiled multitask Keras model with 'return_out' and 'dir_out' heads.
+        X_train: Training features.
+        y_train_reg: Training regression targets (scaled).
+        y_train_cls: Training classification targets (0/1).
+        config: Optional config dict with 'batch_size', 'epochs'.
+        val_split: Validation split ratio.
+        use_class_weights: If True, compute balanced sample weights for direction head.
+
+    Returns:
+        Training history object.
+    """
+    # Merge with defaults
+    cfg = LSTM_CONFIG.copy()
+    if config:
+        cfg.update(config)
+
+    batch_size = cfg["batch_size"]
+    epochs = cfg["epochs"]
+
+    # Compute sample weights for direction head (class imbalance)
+    # Note: We use list-style outputs to avoid Keras compatibility issues
+    # with dict-style sample_weight. Sample weight is applied uniformly
+    # to both outputs since Keras doesn't support per-output weights with lists.
+    sample_weight = None
+    if use_class_weights:
+        dir_weights = compute_sample_weight('balanced', y_train_cls.astype(int))
+        sample_weight = dir_weights  # Applied to combined loss
+        print(f"\nUsing sample weights for direction head:")
+        print(f"  Down weight: {dir_weights[y_train_cls == 0].mean():.3f}")
+        print(f"  Up weight: {dir_weights[y_train_cls == 1].mean():.3f}")
+
+    callbacks = [
+        EarlyStopping(
+            monitor="val_loss",
+            patience=10,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.5,
+            patience=5,
+            verbose=1,
+        ),
+        ModelCheckpoint(
+            filepath=str(LSTM_DIR / "lstm_multitask_best.keras"),
+            monitor="val_loss",
+            save_best_only=True,
+            verbose=1,
+        ),
+    ]
+
+    # Use list-style outputs for compatibility
+    history = model.fit(
+        X_train,
+        [y_train_reg, y_train_cls],  # List format instead of dict
+        validation_split=val_split,
+        epochs=epochs,
+        batch_size=batch_size,
+        callbacks=callbacks,
+        sample_weight=sample_weight,
         verbose=1,
         shuffle=False,  # respect temporal order
     )
@@ -410,7 +568,7 @@ def evaluate_and_save_classifier_predictions(
     X_test: np.ndarray,
     y_test_cls: np.ndarray,
     y_test_reg_raw: np.ndarray = None,
-    threshold: float = 0.5,
+    threshold: float = None,
 ) -> dict:
     """
     Evaluate LSTM classifier and save predictions.
@@ -424,12 +582,22 @@ def evaluate_and_save_classifier_predictions(
         X_test: Test features.
         y_test_cls: True direction labels (0/1).
         y_test_reg_raw: Optional raw returns for RMSE/MAE calculation.
-        threshold: Classification threshold (default 0.5).
+        threshold: Classification threshold. If None, tries to load from
+                   tuned params or defaults to 0.5.
 
     Returns:
         Dict with accuracy, f1, precision, recall metrics.
     """
-    from sklearn.metrics import precision_score, recall_score
+    # Load tuned threshold if not provided
+    if threshold is None:
+        try:
+            from src.hyperparameter_tuning import load_best_params
+            params = load_best_params()
+            threshold = params.get('LSTMClassifier', {}).get('best_threshold', 0.5)
+            print(f"Loaded tuned threshold for classifier: {threshold}")
+        except (FileNotFoundError, KeyError):
+            threshold = 0.5
+            print(f"Using default threshold: {threshold}")
 
     # Predict probabilities
     y_pred_proba = model.predict(X_test, verbose=0).flatten()
@@ -502,9 +670,193 @@ def evaluate_and_save_classifier_predictions(
     }
 
 
+def evaluate_and_save_multitask_predictions(
+    model: tf.keras.Model,
+    X_test: np.ndarray,
+    y_test_reg_raw: np.ndarray,
+    y_test_cls: np.ndarray,
+    threshold: float = None,
+) -> dict:
+    """
+    Evaluate multitask LSTM and save predictions for both outputs.
+
+    For the multitask model, we:
+      1) Get regression predictions from return_out head
+      2) Get direction probabilities from dir_out head
+      3) Apply threshold to direction probabilities
+      4) Compute metrics for both tasks
+
+    Args:
+        model: Trained multitask model with 'return_out' and 'dir_out' heads.
+        X_test: Test features.
+        y_test_reg_raw: True raw returns (for RMSE/MAE).
+        y_test_cls: True direction labels (0/1).
+        threshold: Classification threshold for direction head.
+                   If None, tries to load from tuned params or defaults to 0.5.
+
+    Returns:
+        Dict with rmse, mae, accuracy, f1, precision, recall metrics.
+    """
+    # Load tuned threshold if not provided
+    if threshold is None:
+        try:
+            from src.hyperparameter_tuning import load_best_params
+            params = load_best_params()
+            threshold = params.get('LSTMMultiTask', {}).get('best_threshold', 0.5)
+            print(f"Loaded tuned threshold for multitask: {threshold}")
+        except (FileNotFoundError, KeyError):
+            threshold = 0.5
+            print(f"Using default threshold: {threshold}")
+
+    # Get predictions from both heads
+    predictions = model.predict(X_test, verbose=0)
+    y_pred_reg_scaled = predictions[0].flatten()
+    y_pred_proba = predictions[1].flatten()
+
+    # Inverse transform regression predictions to raw scale
+    target_scaler = joblib.load(LSTM_DIR / "target_scaler.joblib")
+    y_pred_reg_raw = target_scaler.inverse_transform(
+        y_pred_reg_scaled.reshape(-1, 1)
+    ).flatten()
+
+    # Apply threshold to direction predictions
+    y_pred_dir = (y_pred_proba > threshold).astype(int)
+
+    # Compute regression metrics
+    rmse = float(np.sqrt(mean_squared_error(y_test_reg_raw, y_pred_reg_raw)))
+    mae = float(mean_absolute_error(y_test_reg_raw, y_pred_reg_raw))
+
+    # Compute classification metrics
+    acc = float(accuracy_score(y_test_cls, y_pred_dir))
+    f1 = float(f1_score(y_test_cls, y_pred_dir))
+    precision = float(precision_score(y_test_cls, y_pred_dir, zero_division=0))
+    recall = float(recall_score(y_test_cls, y_pred_dir, zero_division=0))
+
+    print("\n" + "="*60)
+    print("MULTITASK LSTM EVALUATION")
+    print("="*60)
+    print(f"\nRegression Metrics:")
+    print(f"  RMSE: {rmse:.4f}")
+    print(f"  MAE:  {mae:.4f}")
+    print(f"\nClassification Metrics (threshold={threshold}):")
+    print(f"  Accuracy:  {acc:.4f}")
+    print(f"  F1 Score:  {f1:.4f}")
+    print(f"  Precision: {precision:.4f}")
+    print(f"  Recall:    {recall:.4f}")
+
+    # Prediction distribution
+    n_pred_up = y_pred_dir.sum()
+    n_pred_down = len(y_pred_dir) - n_pred_up
+    print(f"\nPrediction distribution: Up={n_pred_up} ({100*n_pred_up/len(y_pred_dir):.1f}%), "
+          f"Down={n_pred_down} ({100*n_pred_down/len(y_pred_dir):.1f}%)")
+
+    # Actual distribution
+    n_actual_up = int(y_test_cls.sum())
+    n_actual_down = len(y_test_cls) - n_actual_up
+    print(f"Actual distribution:     Up={n_actual_up} ({100*n_actual_up/len(y_test_cls):.1f}%), "
+          f"Down={n_actual_down} ({100*n_actual_down/len(y_test_cls):.1f}%)")
+
+    # Save predictions for evaluation.py compatibility
+    np.save(LSTM_DIR / "y_pred_reg_lstm.npy", y_pred_reg_raw)
+    np.save(LSTM_DIR / "y_pred_dir_lstm.npy", y_pred_dir)
+    np.save(LSTM_DIR / "y_pred_proba_lstm_multitask.npy", y_pred_proba)
+
+    print("\nSample predictions (first 5):")
+    for i in range(min(5, len(y_test_cls))):
+        print(
+            f"Pred_return: {y_pred_reg_raw[i]:+.3f}%, "
+            f"Pred_prob: {y_pred_proba[i]:.3f}, "
+            f"Pred_dir: {y_pred_dir[i]}, "
+            f"True_return: {y_test_reg_raw[i]:+.3f}%, "
+            f"True_dir: {int(y_test_cls[i])}"
+        )
+
+    print("\nSaved LSTM multitask predictions to:", LSTM_DIR.resolve())
+
+    return {
+        'rmse': rmse,
+        'mae': mae,
+        'accuracy': acc,
+        'f1': f1,
+        'precision': precision,
+        'recall': recall,
+        'threshold': threshold,
+    }
+
+
 # ---------------------------------------------------------------------------
 # LSTM: Public entry point
 # ---------------------------------------------------------------------------
+
+
+def train_and_evaluate_lstm_multitask(config: dict = None) -> tuple[dict, tf.keras.callbacks.History]:
+    """
+    Full multitask LSTM workflow:
+
+      - Set random seeds for reproducibility
+      - Load preprocessed LSTM data from `data/lstm/`
+      - Build multitask model with shared trunk and two heads
+      - Train model with sample weights for class imbalance
+      - Save final model
+      - Evaluate on test set and save predictions
+
+    This is the MULTITASK approach that jointly learns return magnitude
+    (regression) and direction (classification) using a shared representation.
+
+    Args:
+        config: Optional dict with LSTM hyperparameters (units1, units2, dropout,
+                learning_rate, alpha_return). If None, uses LSTM_CONFIG defaults.
+
+    Returns:
+        tuple[dict, tf.keras.callbacks.History]
+            - Dict with rmse, mae, accuracy, f1, precision, recall metrics
+            - Training history object
+    """
+    # Set random seeds for reproducibility
+    import random
+
+    random.seed(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
+    tf.random.set_seed(RANDOM_SEED)
+
+    (
+        X_train,
+        y_train_reg,
+        y_train_cls,
+        X_test,
+        y_test_reg,
+        y_test_cls,
+    ) = load_lstm_data()
+
+    # Load raw returns for evaluation
+    y_test_reg_raw = np.load(LSTM_DIR / "y_test_reg_raw_seq.npy")
+
+    lookback = X_train.shape[1]
+    n_features = X_train.shape[2]
+
+    print("\n" + "="*60)
+    print("LSTM MULTITASK MODE")
+    print("Training to predict both returns (regression) and direction (classification)")
+    print("="*60 + "\n")
+
+    model = build_lstm_multitask(lookback=lookback, n_features=n_features, config=config)
+
+    history = train_lstm_multitask(model, X_train, y_train_reg, y_train_cls, config=config)
+
+    # Generate and save learning curves
+    from src.evaluation import plot_learning_curves
+    plot_learning_curves(history, suffix="_multitask")
+
+    # Save final model
+    final_path = LSTM_DIR / "lstm_multitask_final.keras"
+    model.save(str(final_path))
+    print(f"\nSaved final LSTM multitask model to: {final_path.resolve()}")
+
+    metrics = evaluate_and_save_multitask_predictions(
+        model, X_test, y_test_reg_raw, y_test_cls
+    )
+
+    return metrics, history
 
 
 def train_and_evaluate_lstm_classifier(config: dict = None) -> tuple[dict, tf.keras.callbacks.History]:

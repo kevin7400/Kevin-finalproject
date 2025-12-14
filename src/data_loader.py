@@ -482,6 +482,66 @@ def scale_features(
     return X_train_scaled, X_test_scaled, scaler
 
 
+def clip_returns_train_only(
+    y_train_raw: np.ndarray,
+    y_val_raw: np.ndarray = None,
+    y_test_raw: np.ndarray = None,
+    n_sigma: float = 3.0,
+) -> Tuple[np.ndarray, ...]:
+    """
+    Clip returns at μ ± n_sigma using training data bounds only.
+
+    This prevents data leakage by computing bounds only from training data,
+    then applying the same bounds to validation and test data.
+
+    Args:
+        y_train_raw: Training returns (used to compute bounds)
+        y_val_raw: Optional validation returns
+        y_test_raw: Optional test returns
+        n_sigma: Number of standard deviations for bounds (default: 3.0)
+
+    Returns:
+        Tuple of clipped arrays. If only y_train_raw provided, returns single array.
+        Otherwise returns (train, val, test) tuple with val/test only if provided.
+    """
+    mean_return = float(y_train_raw.mean())
+    std_return = float(y_train_raw.std())
+    lower_bound = mean_return - n_sigma * std_return
+    upper_bound = mean_return + n_sigma * std_return
+
+    # Count clipped samples for logging
+    n_clipped_train = int(
+        ((y_train_raw < lower_bound) | (y_train_raw > upper_bound)).sum()
+    )
+    y_train_clipped = np.clip(y_train_raw, lower_bound, upper_bound)
+
+    print(f"\nOutlier clipping: bounds [{lower_bound:.4f}, {upper_bound:.4f}]")
+    print(f"  Train: clipped {n_clipped_train} samples")
+
+    results = [y_train_clipped]
+
+    if y_val_raw is not None:
+        n_clipped_val = int(
+            ((y_val_raw < lower_bound) | (y_val_raw > upper_bound)).sum()
+        )
+        y_val_clipped = np.clip(y_val_raw, lower_bound, upper_bound)
+        results.append(y_val_clipped)
+        print(f"  Val: clipped {n_clipped_val} samples")
+
+    if y_test_raw is not None:
+        n_clipped_test = int(
+            ((y_test_raw < lower_bound) | (y_test_raw > upper_bound)).sum()
+        )
+        y_test_clipped = np.clip(y_test_raw, lower_bound, upper_bound)
+        results.append(y_test_clipped)
+        print(f"  Test: clipped {n_clipped_test} samples")
+
+    # Return single array if only train provided, otherwise tuple
+    if len(results) == 1:
+        return results[0]
+    return tuple(results)
+
+
 def create_sequences(
     X: np.ndarray,
     y: np.ndarray,
@@ -554,16 +614,9 @@ def prepare_lstm_data() -> None:
     y_test_reg_raw = df_test[target_reg_col].values
 
     # Outlier handling: clip returns at μ ± 3σ (using training data only to avoid leakage)
-    mean_return = y_train_reg_raw.mean()
-    std_return = y_train_reg_raw.std()
-    lower_bound = mean_return - 3 * std_return
-    upper_bound = mean_return + 3 * std_return
-    n_clipped_train = ((y_train_reg_raw < lower_bound) | (y_train_reg_raw > upper_bound)).sum()
-    n_clipped_test = ((y_test_reg_raw < lower_bound) | (y_test_reg_raw > upper_bound)).sum()
-    y_train_reg_raw = np.clip(y_train_reg_raw, lower_bound, upper_bound)
-    y_test_reg_raw = np.clip(y_test_reg_raw, lower_bound, upper_bound)
-    print(f"\nOutlier handling: bounds [{lower_bound:.4f}, {upper_bound:.4f}]")
-    print(f"  Clipped {n_clipped_train} train samples, {n_clipped_test} test samples")
+    y_train_reg_raw, y_test_reg_raw = clip_returns_train_only(
+        y_train_reg_raw, y_test_raw=y_test_reg_raw, n_sigma=3.0
+    )
 
     # Scale regression targets using StandardScaler (for LSTM training)
     # This centers targets around 0, which helps the LSTM learn both positive

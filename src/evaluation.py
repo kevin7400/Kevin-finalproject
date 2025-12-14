@@ -113,10 +113,17 @@ def plot_learning_curves(
     if history is None or not hasattr(history, "history"):
         raise ValueError("Invalid history object: must have 'history' attribute")
 
-    # Detect if this is a classifier or regressor based on metrics
-    is_classifier = "accuracy" in history.history
+    # Detect model type based on available metrics
+    is_multitask = "return_out_mae" in history.history or "dir_out_accuracy" in history.history
+    is_classifier = "accuracy" in history.history and not is_multitask
 
-    if is_classifier:
+    if is_multitask:
+        # Multitask model: use return_out_mae as the secondary metric
+        required_keys = ["loss", "val_loss", "return_out_mae", "val_return_out_mae"]
+        metric_key = "return_out_mae"
+        metric_label = "Return MAE"
+        loss_label = "Combined Loss"
+    elif is_classifier:
         required_keys = ["loss", "val_loss", "accuracy", "val_accuracy"]
         metric_key = "accuracy"
         metric_label = "Accuracy"
@@ -621,7 +628,7 @@ def load_lstm_predictions(
     return y_test_reg_raw_seq, y_test_cls_seq, y_pred_reg_lstm, y_pred_dir_lstm, y_test_reg_seq
 
 
-def evaluate_all_models(tuned_params: dict = None) -> pd.DataFrame:
+def evaluate_all_models(tuned_params: dict = None, lstm_mode: str = "regressor") -> pd.DataFrame:
     """Train baselines, evaluate them and the LSTM, and save comparison table.
 
     Steps:
@@ -642,6 +649,10 @@ def evaluate_all_models(tuned_params: dict = None) -> pd.DataFrame:
                 'XGBoost': {'best_params': dict},
                 'LSTM': {'best_params': dict}  # Note: LSTM needs retraining separately
             }
+        lstm_mode: LSTM mode - "regressor", "classifier", or "multitask".
+            - regressor: LSTM predicts returns, direction from sign (RMSE/MAE valid)
+            - classifier: LSTM predicts direction directly (RMSE/MAE set to NaN)
+            - multitask: LSTM predicts both (RMSE/MAE valid)
 
     Returns:
         A pandas DataFrame with one row per model and metrics columns.
@@ -758,15 +769,23 @@ def evaluate_all_models(tuned_params: dict = None) -> pd.DataFrame:
     pct_up_actual = (y_test_cls_seq == 1).mean() * 100
     pct_down_actual = (y_test_cls_seq == 0).mean() * 100
 
-    print(f"\nLSTM Direction Predictions:")
+    print(f"\nLSTM Direction Predictions (mode={lstm_mode}):")
     print(f"  Predicted Up:   {pct_up_pred:.1f}%  ({(y_pred_dir_lstm == 1).sum()} samples)")
     print(f"  Predicted Down: {pct_down_pred:.1f}%  ({(y_pred_dir_lstm == 0).sum()} samples)")
     print(f"  Actual Up:      {pct_up_actual:.1f}%  ({(y_test_cls_seq == 1).sum()} samples)")
     print(f"  Actual Down:    {pct_down_actual:.1f}%  ({(y_test_cls_seq == 0).sum()} samples)")
 
-    # Use raw targets for RMSE/MAE calculation
-    rmse_lstm = float(np.sqrt(mean_squared_error(y_test_reg_raw_seq, y_pred_reg_lstm)))
-    mae_lstm = float(mean_absolute_error(y_test_reg_raw_seq, y_pred_reg_lstm))
+    # Compute metrics based on mode
+    if lstm_mode == "classifier":
+        # Classifier mode: RMSE/MAE not applicable (predictions are probabilities)
+        rmse_lstm = np.nan
+        mae_lstm = np.nan
+    else:
+        # Regressor/multitask mode: compute RMSE/MAE from raw return predictions
+        rmse_lstm = float(np.sqrt(mean_squared_error(y_test_reg_raw_seq, y_pred_reg_lstm)))
+        mae_lstm = float(mean_absolute_error(y_test_reg_raw_seq, y_pred_reg_lstm))
+
+    # Classification metrics are always computed
     acc_lstm = float(accuracy_score(y_test_cls_seq, y_pred_dir_lstm))
     f1_lstm = float(f1_score(y_test_cls_seq, y_pred_dir_lstm))
     precision_lstm = float(precision_score(y_test_cls_seq, y_pred_dir_lstm, zero_division=0))

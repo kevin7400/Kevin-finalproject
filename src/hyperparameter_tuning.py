@@ -24,7 +24,12 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import f1_score, mean_squared_error, mean_absolute_error
+from sklearn.metrics import (
+    f1_score,
+    mean_squared_error,
+    mean_absolute_error,
+    balanced_accuracy_score,
+)
 from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBRegressor
 from tqdm import tqdm
@@ -45,6 +50,7 @@ from src.data_loader import (
     TUNE_VAL_END,
     TEST_START,
     END_DATE,
+    clip_returns_train_only,
 )
 
 
@@ -92,6 +98,62 @@ LSTM_PARAM_GRID = {
 
 # Number of random samples for LSTM tuning
 LSTM_N_SAMPLES = 50
+
+
+# ---------------------------------------------------------------------------
+# Threshold Tuning Helper
+# ---------------------------------------------------------------------------
+
+
+def find_best_threshold(
+    y_true_cls: np.ndarray,
+    y_pred_continuous: np.ndarray,
+    metric: str = "f1",
+    n_quantiles: int = 100,
+) -> Tuple[float, float]:
+    """
+    Find optimal threshold using quantiles of prediction distribution.
+
+    Instead of a fixed grid, this scans thresholds based on the actual
+    prediction distribution, which adapts to model behavior.
+
+    Args:
+        y_true_cls: True binary labels (0=Down, 1=Up)
+        y_pred_continuous: Continuous predictions (raw returns or probabilities)
+        metric: "f1" for F1 score or "balanced_acc" for balanced accuracy
+        n_quantiles: Number of quantile-based thresholds to try (default: 100)
+
+    Returns:
+        Tuple of (best_threshold, best_score)
+    """
+    # Generate thresholds from prediction quantiles (5th to 95th percentile)
+    thresholds = np.percentile(y_pred_continuous, np.linspace(5, 95, n_quantiles))
+
+    # Also include 0.0 and 0.5 as common thresholds
+    thresholds = np.unique(np.concatenate([thresholds, [0.0, 0.5]]))
+
+    best_threshold = 0.0
+    best_score = 0.0
+
+    for thresh in thresholds:
+        y_pred_dir = (y_pred_continuous > thresh).astype(int)
+
+        # Skip if all predictions are the same class
+        if len(np.unique(y_pred_dir)) == 1:
+            continue
+
+        if metric == "f1":
+            score = f1_score(y_true_cls, y_pred_dir, zero_division=0)
+        elif metric == "balanced_acc":
+            score = balanced_accuracy_score(y_true_cls, y_pred_dir)
+        else:
+            raise ValueError(f"Unknown metric: {metric}. Use 'f1' or 'balanced_acc'.")
+
+        if score > best_score:
+            best_score = score
+            best_threshold = float(thresh)
+
+    return best_threshold, best_score
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +216,12 @@ def prepare_tuning_data() -> Tuple[
     y_train_reg_raw = df_train[target_reg_col].values
     y_val_reg_raw = df_val[target_reg_col].values
     y_test_reg_raw = df_test[target_reg_col].values
+
+    # Clip outliers at μ ± 3σ (using training data only to avoid leakage)
+    # This is consistent with prepare_lstm_data() in data_loader.py
+    y_train_reg_raw, y_val_reg_raw, y_test_reg_raw = clip_returns_train_only(
+        y_train_reg_raw, y_val_raw=y_val_reg_raw, y_test_raw=y_test_reg_raw, n_sigma=3.0
+    )
 
     # Scale regression targets for LSTM (StandardScaler centers around 0)
     target_scaler = StandardScaler()
@@ -608,9 +676,53 @@ def tune_lstm(
 
     print(f"Best params: {best_params}, Val F1: {best_f1:.4f}")
 
+    # Threshold tuning: retrain best model and find optimal threshold
+    best_threshold = 0.0  # Default threshold
+    best_threshold_f1 = best_f1
+
+    if best_params is not None:
+        print("\n--- Tuning threshold for best LSTM model ---")
+        try:
+            # Retrain best model
+            model = build_lstm_with_params(lookback, n_features, best_params)
+            model.fit(
+                X_train_seq, y_train_reg_seq,
+                validation_data=(X_val_seq, y_val_reg_seq),
+                epochs=best_params.get('epochs', 50),
+                batch_size=best_params['batch_size'],
+                callbacks=[
+                    EarlyStopping(
+                        monitor='val_loss',
+                        patience=5,
+                        restore_best_weights=True,
+                        verbose=0,
+                    )
+                ],
+                verbose=0,
+            )
+
+            # Get raw predictions on validation
+            y_pred_val_scaled = model.predict(X_val_seq, verbose=0).flatten()
+            y_pred_val_raw = target_scaler.inverse_transform(
+                y_pred_val_scaled.reshape(-1, 1)
+            ).flatten()
+
+            # Find best threshold using validation predictions
+            best_threshold, best_threshold_f1 = find_best_threshold(
+                y_val_cls_seq, y_pred_val_raw, metric="f1"
+            )
+            print(f"Tuned threshold: {best_threshold:.4f}, F1: {best_threshold_f1:.4f}")
+
+        except Exception as e:
+            print(f"Warning: Threshold tuning failed: {e}")
+        finally:
+            tf.keras.backend.clear_session()
+
     return {
         'best_params': best_params,
         'best_f1': best_f1,
+        'best_threshold': best_threshold,
+        'best_threshold_f1': best_threshold_f1,
         'search_results': results,
     }
 
@@ -772,6 +884,183 @@ def tune_lstm_classifier(
     }
 
 
+# LSTM Multitask hyperparameter grid
+LSTM_MULTITASK_PARAM_GRID = {
+    'units1': [32, 64, 128],
+    'units2': [16, 32, 64],
+    'dropout': [0.1, 0.2, 0.3],
+    'learning_rate': [0.0001, 0.0005, 0.001, 0.005],
+    'batch_size': [16, 32, 64],
+    'alpha_return': [0.3, 0.5, 0.7],  # Loss weight for return head
+}
+
+
+def build_lstm_multitask_with_params(
+    lookback: int,
+    n_features: int,
+    params: Dict[str, Any],
+) -> tf.keras.Model:
+    """Build LSTM multitask model with specified hyperparameters."""
+    from tensorflow.keras.layers import Input as KerasInput
+    from tensorflow.keras.models import Model
+
+    alpha_return = params.get('alpha_return', 0.5)
+
+    # Shared trunk using Functional API
+    inputs = KerasInput(shape=(lookback, n_features), name="input")
+    x = LSTM(params['units1'], return_sequences=True, name="lstm1")(inputs)
+    x = Dropout(params['dropout'], name="dropout1")(x)
+    x = LSTM(params['units2'], name="lstm2")(x)
+    x = Dropout(params['dropout'], name="dropout2")(x)
+
+    # Regression head (returns)
+    return_out = Dense(1, activation="linear", name="return_out")(x)
+
+    # Classification head (direction)
+    dir_out = Dense(1, activation="sigmoid", name="dir_out")(x)
+
+    model = Model(inputs=inputs, outputs=[return_out, dir_out], name="lstm_multitask")
+
+    model.compile(
+        optimizer=Adam(learning_rate=params['learning_rate']),
+        loss={
+            "return_out": "mse",
+            "dir_out": "binary_crossentropy",
+        },
+        loss_weights={
+            "return_out": alpha_return,
+            "dir_out": 1.0 - alpha_return,
+        },
+        metrics={
+            "return_out": ["mae"],
+            "dir_out": ["accuracy"],
+        },
+    )
+    return model
+
+
+def tune_lstm_multitask(
+    X_train_seq: np.ndarray,
+    y_train_reg_seq: np.ndarray,
+    y_train_cls_seq: np.ndarray,
+    X_val_seq: np.ndarray,
+    y_val_reg_seq: np.ndarray,
+    y_val_cls_seq: np.ndarray,
+    target_scaler: Any,
+    n_samples: int = LSTM_N_SAMPLES,
+) -> Dict[str, Any]:
+    """
+    Random search for LSTM multitask hyperparameters.
+
+    Optimizes for combined performance: regression (RMSE) and direction (F1).
+
+    Args:
+        X_train_seq: Training sequences (scaled features).
+        y_train_reg_seq: Training regression targets (scaled).
+        y_train_cls_seq: Training classification targets (0/1).
+        X_val_seq: Validation sequences (scaled features).
+        y_val_reg_seq: Validation regression targets (scaled).
+        y_val_cls_seq: Validation classification targets (0/1).
+        target_scaler: Fitted StandardScaler for inverse transform.
+        n_samples: Number of random combinations to try.
+
+    Returns:
+        dict with 'best_params', 'best_f1', 'best_threshold', 'search_results'
+    """
+    print(f"\n--- Tuning LSTM Multitask (random search, {n_samples} samples) ---")
+
+    # Generate all possible combinations
+    param_names = list(LSTM_MULTITASK_PARAM_GRID.keys())
+    param_values = list(LSTM_MULTITASK_PARAM_GRID.values())
+    all_combinations = list(product(*param_values))
+
+    # Random sample
+    np.random.seed(RANDOM_SEED)
+    if n_samples < len(all_combinations):
+        indices = np.random.choice(len(all_combinations), n_samples, replace=False)
+        sampled_combinations = [all_combinations[i] for i in indices]
+    else:
+        sampled_combinations = all_combinations
+
+    lookback = X_train_seq.shape[1]
+    n_features = X_train_seq.shape[2]
+
+    # Note: We don't use sample_weight during tuning to avoid Keras compatibility
+    # issues with dict-style outputs. The final training will use sample_weight.
+    # Tuning focuses on finding optimal hyperparameters using F1 on validation set.
+
+    best_f1 = -1.0
+    best_params = None
+    best_threshold = 0.5
+    results = []
+
+    for combo in tqdm(sampled_combinations, desc="LSTM Multitask random search"):
+        params = dict(zip(param_names, combo))
+        params['epochs'] = 50  # Max epochs (early stopping will cut short)
+
+        try:
+            # Build multitask model
+            model = build_lstm_multitask_with_params(lookback, n_features, params)
+
+            # Train with early stopping (no sample_weight to avoid Keras dict issues)
+            history = model.fit(
+                X_train_seq,
+                [y_train_reg_seq, y_train_cls_seq],  # List format for outputs
+                validation_split=0.1,
+                epochs=params['epochs'],
+                batch_size=params['batch_size'],
+                callbacks=[
+                    EarlyStopping(
+                        monitor='val_loss',
+                        patience=5,
+                        restore_best_weights=True,
+                        verbose=0,
+                    )
+                ],
+                verbose=0,
+                shuffle=False,  # Respect temporal order
+            )
+
+            # Get predictions from both heads
+            y_pred_reg_scaled, y_pred_proba = model.predict(X_val_seq, verbose=0)
+            y_pred_proba = y_pred_proba.flatten()
+
+            # Find best threshold for direction head
+            best_thresh, best_thresh_f1 = find_best_threshold(
+                y_val_cls_seq, y_pred_proba, metric="f1"
+            )
+
+            results.append({
+                'params': params,
+                'val_f1': best_thresh_f1,
+                'threshold': best_thresh,
+            })
+
+            if best_thresh_f1 > best_f1:
+                best_f1 = best_thresh_f1
+                best_params = params.copy()
+                best_threshold = best_thresh
+
+        except Exception as e:
+            import traceback
+            print(f"Error with params {params}: {type(e).__name__}: {e}")
+            traceback.print_exc()
+            continue
+
+        finally:
+            # Clear session to prevent memory buildup
+            tf.keras.backend.clear_session()
+
+    print(f"Best params: {best_params}, threshold: {best_threshold:.3f}, Val F1: {best_f1:.4f}")
+
+    return {
+        'best_params': best_params,
+        'best_f1': best_f1,
+        'best_threshold': best_threshold,
+        'search_results': results,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Save/Load Best Parameters
 # ---------------------------------------------------------------------------
@@ -787,6 +1076,11 @@ def save_best_params(results: Dict[str, Any]) -> None:
                 'best_f1': float(data['best_f1']),
             }
         else:
+            # Skip if best_params is None (all trials failed)
+            if data.get('best_params') is None:
+                print(f"Warning: Skipping {model_name} - no valid params found (all trials failed)")
+                continue
+
             # Convert numpy types to Python natives
             params = {}
             for k, v in data['best_params'].items():
@@ -822,7 +1116,7 @@ def load_best_params() -> Dict[str, Any]:
 # Main Tuning Entry Point
 # ---------------------------------------------------------------------------
 
-def tune_all_models(save_results: bool = True, use_classifier: bool = False) -> Dict[str, Any]:
+def tune_all_models(save_results: bool = True, mode: str = "regressor") -> Dict[str, Any]:
     """
     Run hyperparameter tuning for all models.
 
@@ -834,18 +1128,19 @@ def tune_all_models(save_results: bool = True, use_classifier: bool = False) -> 
 
     Args:
         save_results: Whether to save results to JSON file.
-        use_classifier: If True, tune LSTM as a classifier (binary_crossentropy)
-                       instead of regressor (MSE/MAE/Huber).
+        mode: LSTM training mode - "regressor", "classifier", or "multitask".
 
     Returns:
         dict mapping model_name -> tuning results
     """
+    mode_display = {
+        "regressor": "REGRESSOR (MSE/MAE/Huber)",
+        "classifier": "CLASSIFIER (binary_crossentropy)",
+        "multitask": "MULTITASK (shared trunk, dual heads)",
+    }
     print("=" * 60)
     print("HYPERPARAMETER TUNING")
-    if use_classifier:
-        print("LSTM Mode: CLASSIFIER (binary_crossentropy)")
-    else:
-        print("LSTM Mode: REGRESSOR (MSE/MAE/Huber)")
+    print(f"LSTM Mode: {mode_display.get(mode, mode)}")
     print("=" * 60)
 
     # Prepare data
@@ -892,15 +1187,23 @@ def tune_all_models(save_results: bool = True, use_classifier: bool = False) -> 
     )
     print(f"  X_train_seq: {X_train_seq.shape}, X_val_seq: {X_val_seq.shape}")
 
-    if use_classifier:
+    if mode == "classifier":
         # Tune LSTM as classifier
         lstm_results = tune_lstm_classifier(
             X_train_seq, y_train_cls_seq,
             X_val_seq, y_val_cls_seq,
         )
         results['LSTMClassifier'] = lstm_results
+    elif mode == "multitask":
+        # Tune LSTM as multitask (both regression and classification)
+        lstm_results = tune_lstm_multitask(
+            X_train_seq, y_train_reg_seq, y_train_cls_seq,
+            X_val_seq, y_val_reg_seq, y_val_cls_seq,
+            target_scaler,
+        )
+        results['LSTMMultiTask'] = lstm_results
     else:
-        # Tune LSTM as regressor (original behavior)
+        # Tune LSTM as regressor (default)
         lstm_results = tune_lstm(
             X_train_seq, y_train_reg_seq,
             X_val_seq, y_val_reg_seq, y_val_cls_seq,
@@ -919,8 +1222,9 @@ def tune_all_models(save_results: bool = True, use_classifier: bool = False) -> 
     for model_name, data in results.items():
         if model_name == 'LinearRegression':
             print(f"{model_name}: threshold={data['best_threshold']:.4f}, Val F1={data['best_f1']:.4f}")
-        elif model_name == 'LSTMClassifier':
-            print(f"{model_name}: {data['best_params']}, threshold={data['best_threshold']:.3f}, Val F1={data['best_f1']:.4f}")
+        elif model_name in ('LSTMClassifier', 'LSTMMultiTask', 'LSTM'):
+            threshold_str = f", threshold={data['best_threshold']:.4f}" if 'best_threshold' in data else ""
+            print(f"{model_name}: {data['best_params']}{threshold_str}, Val F1={data['best_f1']:.4f}")
         else:
             print(f"{model_name}: {data['best_params']}, Val F1={data['best_f1']:.4f}")
 

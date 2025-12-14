@@ -79,9 +79,10 @@ The system is intentionally linear and modular. At a high level:
    - Splits by date:
      - Train: `index <= TRAIN_END`.
      - Test:  `index >= TEST_START`.
-   - Applies outlier handling to returns (after split to avoid data leakage):
+   - Applies outlier handling to returns using `clip_returns_train_only()` helper:
      - Calculates mean (μ) and standard deviation (σ) from training data only.
      - Clips extreme returns to μ ± 3σ bounds for both train and test.
+     - This helper is shared by both `prepare_lstm_data()` and `prepare_tuning_data()` for consistency.
    - Scales 12 features using `MinMaxScaler` (fit on train, apply on test).
    - Builds sequences:
      - For each time `t`, uses `LOOKBACK` consecutive days `[t-LOOKBACK+1, ..., t]`
@@ -93,12 +94,16 @@ The system is intentionally linear and modular. At a high level:
 
 4. **Hyperparameter tuning** (optional, `src.hyperparameter_tuning.tune_all_models()`)
    - Uses train/val/test split (train: 2018-2021, val: 2022, test: 2023-2024).
+   - Supports three LSTM modes via `mode` parameter: `regressor`, `classifier`, `multitask`.
    - Tunes each model:
      - LinearRegression: Grid search over classification thresholds.
-     - RandomForest: Grid search over n_estimators, max_depth, min_samples_split.
-     - XGBoost: Grid search over n_estimators, learning_rate, max_depth, gamma.
-     - LSTM: Random search over units, dropout, learning_rate, batch_size.
-   - Uses balanced sample weights for RF and XGB to handle class imbalance.
+     - RandomForest: Grid search over n_estimators, max_depth, min_samples_split, + threshold.
+     - XGBoost: Grid search over n_estimators, learning_rate, max_depth, gamma, + threshold.
+     - LSTM (regressor): Random search over units, dropout, learning_rate, batch_size, loss, + threshold.
+     - LSTM (classifier): Random search over units, dropout, learning_rate, batch_size, + threshold.
+     - LSTM (multitask): Random search over units, dropout, learning_rate, batch_size, alpha_return, + threshold.
+   - Uses balanced sample weights for RF, XGB, and LSTM classifier/multitask to handle class imbalance.
+   - Uses `find_best_threshold()` to tune optimal direction prediction threshold for each model.
    - Saves best parameters to `data/tuning/best_params.json`.
 
 5. **LSTM training & prediction** (`src.models.train_and_evaluate_lstm()`)
@@ -234,7 +239,74 @@ This structure:
 - Follows common educational/tutorial patterns for ML projects
 
 
-### 3.7. Clear separation of concerns
+### 3.7. Multi-task Learning Architecture
+
+The project supports three LSTM modes for direction prediction:
+
+| Mode | Description | Output |
+|------|-------------|--------|
+| `regressor` | Predicts returns, derives direction from sign | Returns + Direction |
+| `classifier` | Predicts direction directly via sigmoid | Direction only |
+| `multitask` | Shared trunk with dual output heads | Returns + Direction |
+
+**Multitask LSTM Architecture:**
+
+```
+Input (lookback, n_features)
+         │
+    LSTM(units1, return_sequences=True)
+         │
+    Dropout(rate)
+         │
+    LSTM(units2)
+         │
+    Dropout(rate)
+         │
+    +----+----+
+    │         │
+Dense(1)   Dense(1)
+linear     sigmoid
+    │         │
+return_out  dir_out
+```
+
+The multitask model uses:
+- **Shared trunk**: Both heads share the LSTM representation
+- **Separate heads**: Linear for regression, sigmoid for classification
+- **Loss weighting**: Configurable `alpha_return` to balance losses (default 0.5)
+- **Class weights**: Sample weights applied to direction head for imbalance handling
+
+This architecture enables the model to learn representations useful for both tasks simultaneously.
+
+
+### 3.8. Threshold Tuning for Direction Prediction
+
+All models now include optimal threshold tuning using the `find_best_threshold()` helper:
+
+```python
+def find_best_threshold(
+    y_true_cls: np.ndarray,
+    y_pred_continuous: np.ndarray,
+    metric: str = "f1",  # or "balanced_acc"
+    n_quantiles: int = 100,
+) -> Tuple[float, float]:
+```
+
+**How it works:**
+1. Generate thresholds from quantiles of the prediction distribution
+2. Include canonical thresholds (0.0 for returns, 0.5 for probabilities)
+3. Search for threshold that maximizes F1 or balanced accuracy
+4. Return best threshold and corresponding score
+
+**Application by model type:**
+- **Regressors** (LSTM, baselines): Threshold applied to raw return predictions
+- **Classifiers** (LSTM classifier): Threshold applied to sigmoid probabilities
+- **Multitask**: Threshold applied to direction head probabilities
+
+This approach adapts to the actual prediction distribution rather than assuming a fixed threshold.
+
+
+### 3.9. Clear separation of concerns
 
 Each module has a narrow responsibility:
 
@@ -250,7 +322,7 @@ This separation makes it easier to:
 - Keep side effects (file IO, downloads) localized.
 
 
-### 3.8. Python package with proper imports
+### 3.10. Python package with proper imports
 
 The project is configured as a Python package:
 
@@ -266,7 +338,7 @@ Advantages:
 - No import confusion between local modules and installed dependencies.
 
 
-### 3.9. Artifacts as first-class outputs
+### 3.11. Artifacts as first-class outputs
 
 Intermediate artifacts are saved to disk at each stage:
 
@@ -284,7 +356,7 @@ This design enables:
 - Auditing the exact data that fed each model.
 
 
-### 3.10. Testability
+### 3.12. Testability
 
 Tests are written to:
 

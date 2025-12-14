@@ -117,9 +117,11 @@ Once the environment is activated:
 **Using virtualenv:**
 ```bash
 source .venv/bin/activate
-python main.py                    # Uses tuned parameters (default)
+python main.py                    # Uses tuned parameters (default, regressor mode)
 python main.py --tune             # Run hyperparameter tuning (~35 min)
 python main.py --no-tuned         # Use default parameters instead
+python main.py --mode classifier  # Use LSTM classifier (predicts direction)
+python main.py --mode multitask   # Use LSTM multitask (predicts both)
 ```
 
 **Using conda:**
@@ -127,6 +129,29 @@ python main.py --no-tuned         # Use default parameters instead
 conda activate kevin-lstm
 python main.py
 ```
+
+### LSTM Modes
+
+The pipeline supports three LSTM modes via the `--mode` flag:
+
+| Mode | Description | Output | RMSE/MAE |
+|------|-------------|--------|----------|
+| `regressor` (default) | Predicts returns, derives direction from sign | Returns + Direction | Valid |
+| `classifier` | Predicts direction directly via sigmoid | Direction only | N/A |
+| `multitask` | Shared trunk with dual heads for both tasks | Returns + Direction | Valid |
+
+**Multitask Architecture:**
+```
+Input -> LSTM(units1) -> Dropout -> LSTM(units2) -> Dropout
+                    |
+            +-------+-------+
+            |               |
+        Dense(1)        Dense(1)
+        linear          sigmoid
+        return_out      dir_out
+```
+
+The multitask model learns shared representations for both return prediction and direction classification, potentially improving both tasks through joint learning.
 
 > **Note**: By default, the pipeline uses previously saved tuned parameters from `data/tuning/best_params.json`. If no tuned parameters exist, it falls back to defaults. Run `python main.py --tune` once to generate optimized parameters.
 
@@ -188,7 +213,9 @@ This will:
 The pipeline includes an optional hyperparameter tuning step that optimizes all models:
 
 ```bash
-python main.py --tune    # Takes ~35 minutes
+python main.py --tune                   # Tune with regressor mode (default)
+python main.py --tune --mode classifier # Tune with classifier mode
+python main.py --tune --mode multitask  # Tune with multitask mode
 ```
 
 **What gets tuned:**
@@ -196,13 +223,22 @@ python main.py --tune    # Takes ~35 minutes
 | Model | Method | Parameters Tuned |
 |-------|--------|------------------|
 | LinearRegression | Grid Search | Classification threshold |
-| RandomForest | Grid Search | n_estimators, max_depth, min_samples_split |
-| XGBoost | Grid Search | n_estimators, learning_rate, max_depth, gamma |
-| LSTM | Random Search | units, dropout, learning_rate, batch_size |
+| RandomForest | Grid Search | n_estimators, max_depth, min_samples_split, threshold |
+| XGBoost | Grid Search | n_estimators, learning_rate, max_depth, gamma, threshold |
+| LSTM (regressor) | Random Search | units, dropout, learning_rate, batch_size, loss, **threshold** |
+| LSTM (classifier) | Random Search | units, dropout, learning_rate, batch_size, **threshold** |
+| LSTM (multitask) | Random Search | units, dropout, learning_rate, batch_size, alpha_return, **threshold** |
+
+**Threshold Tuning:**
+
+All models now include optimal threshold tuning for direction prediction:
+- For regressors: threshold is applied to raw return predictions
+- For classifiers: threshold is applied to sigmoid probabilities
+- Thresholds are found using quantile-based search on validation data
 
 **Class Imbalance Handling:**
 
-The baseline models (RandomForest, XGBoost) use balanced sample weights during training to prevent them from exploiting class imbalance. Without this, models could achieve artificially high F1 scores by always predicting the majority class.
+The baseline models (RandomForest, XGBoost) and LSTM classifier/multitask use balanced sample weights during training to prevent them from exploiting class imbalance. Without this, models could achieve artificially high F1 scores by always predicting the majority class.
 
 Tuned parameters are saved to `data/tuning/best_params.json` and automatically loaded in subsequent runs.
 
