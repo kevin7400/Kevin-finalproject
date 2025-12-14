@@ -338,11 +338,34 @@ def tune_random_forest(
             best_f1 = f1
             best_params = params.copy()
 
-    print(f"Best params: {best_params}, Val F1: {best_f1:.4f}")
+    print(f"Best params: {best_params}, Val F1 (threshold=0): {best_f1:.4f}")
+
+    # Retrain with best params and tune threshold
+    print("Tuning threshold for RandomForest...")
+    best_model = RandomForestRegressor(
+        n_estimators=best_params['n_estimators'],
+        max_depth=best_params['max_depth'],
+        min_samples_split=best_params['min_samples_split'],
+        random_state=RANDOM_SEED,
+        n_jobs=-1,
+    )
+    best_model.fit(X_train, y_train_reg, sample_weight=sample_weight)
+    y_pred_val = best_model.predict(X_val)
+
+    best_threshold = 0.0
+    best_f1_with_threshold = best_f1
+    for threshold in LR_THRESHOLD_GRID:
+        f1 = compute_f1_from_predictions(y_val_cls, y_pred_val, threshold)
+        if f1 > best_f1_with_threshold:
+            best_f1_with_threshold = f1
+            best_threshold = float(threshold)
+
+    print(f"Best threshold: {best_threshold:.4f}, Val F1: {best_f1_with_threshold:.4f}")
 
     return {
         'best_params': best_params,
-        'best_f1': best_f1,
+        'best_threshold': best_threshold,
+        'best_f1': best_f1_with_threshold,
         'search_results': results,
     }
 
@@ -415,11 +438,39 @@ def tune_xgboost(
             best_f1 = f1
             best_params = params.copy()
 
-    print(f"Best params: {best_params}, Val F1: {best_f1:.4f}")
+    print(f"Best params: {best_params}, Val F1 (threshold=0): {best_f1:.4f}")
+
+    # Retrain with best params and tune threshold
+    print("Tuning threshold for XGBoost...")
+    best_model = XGBRegressor(
+        n_estimators=best_params['n_estimators'],
+        learning_rate=best_params['learning_rate'],
+        max_depth=best_params['max_depth'],
+        gamma=best_params['gamma'],
+        subsample=0.8,
+        colsample_bytree=0.8,
+        objective='reg:squarederror',
+        random_state=RANDOM_SEED,
+        n_jobs=-1,
+        verbosity=0,
+    )
+    best_model.fit(X_train, y_train_reg, sample_weight=sample_weight)
+    y_pred_val = best_model.predict(X_val)
+
+    best_threshold = 0.0
+    best_f1_with_threshold = best_f1
+    for threshold in LR_THRESHOLD_GRID:
+        f1 = compute_f1_from_predictions(y_val_cls, y_pred_val, threshold)
+        if f1 > best_f1_with_threshold:
+            best_f1_with_threshold = f1
+            best_threshold = float(threshold)
+
+    print(f"Best threshold: {best_threshold:.4f}, Val F1: {best_f1_with_threshold:.4f}")
 
     return {
         'best_params': best_params,
-        'best_f1': best_f1,
+        'best_threshold': best_threshold,
+        'best_f1': best_f1_with_threshold,
         'search_results': results,
     }
 
@@ -564,6 +615,163 @@ def tune_lstm(
     }
 
 
+def build_lstm_classifier_with_params(
+    lookback: int,
+    n_features: int,
+    params: Dict[str, Any],
+) -> tf.keras.Model:
+    """Build LSTM classifier model with specified hyperparameters."""
+    model = Sequential([
+        Input(shape=(lookback, n_features)),
+        LSTM(params['units1'], return_sequences=True),
+        Dropout(params['dropout']),
+        LSTM(params['units2']),
+        Dropout(params['dropout']),
+        Dense(1, activation='sigmoid'),  # Sigmoid for binary classification
+    ])
+
+    model.compile(
+        optimizer=Adam(learning_rate=params['learning_rate']),
+        loss='binary_crossentropy',  # Classification loss
+        metrics=['accuracy'],
+    )
+    return model
+
+
+# LSTM Classifier hyperparameter grid (no 'loss' - always binary_crossentropy)
+LSTM_CLASSIFIER_PARAM_GRID = {
+    'units1': [32, 64, 128],
+    'units2': [16, 32, 64],
+    'dropout': [0.1, 0.2, 0.3],
+    'learning_rate': [0.0001, 0.0005, 0.001, 0.005],
+    'batch_size': [16, 32, 64],
+}
+
+
+def tune_lstm_classifier(
+    X_train_seq: np.ndarray,
+    y_train_cls_seq: np.ndarray,
+    X_val_seq: np.ndarray,
+    y_val_cls_seq: np.ndarray,
+    n_samples: int = LSTM_N_SAMPLES,
+) -> Dict[str, Any]:
+    """
+    Random search for LSTM classifier hyperparameters.
+
+    Uses random sampling from the parameter grid for efficiency.
+    Optimizes directly for F1 score on binary classification task.
+
+    Args:
+        X_train_seq: Training sequences (scaled features).
+        y_train_cls_seq: Training classification targets (0/1).
+        X_val_seq: Validation sequences (scaled features).
+        y_val_cls_seq: Validation classification targets (0/1).
+        n_samples: Number of random combinations to try.
+
+    Returns:
+        dict with 'best_params', 'best_f1', 'best_threshold', 'search_results'
+    """
+    from sklearn.utils.class_weight import compute_class_weight
+
+    print(f"\n--- Tuning LSTM Classifier (random search, {n_samples} samples) ---")
+
+    # Generate all possible combinations
+    param_names = list(LSTM_CLASSIFIER_PARAM_GRID.keys())
+    param_values = list(LSTM_CLASSIFIER_PARAM_GRID.values())
+    all_combinations = list(product(*param_values))
+
+    # Random sample
+    np.random.seed(RANDOM_SEED)
+    if n_samples < len(all_combinations):
+        indices = np.random.choice(len(all_combinations), n_samples, replace=False)
+        sampled_combinations = [all_combinations[i] for i in indices]
+    else:
+        sampled_combinations = all_combinations
+
+    lookback = X_train_seq.shape[1]
+    n_features = X_train_seq.shape[2]
+
+    # Compute class weights
+    classes = np.array([0, 1])
+    class_weights = compute_class_weight('balanced', classes=classes, y=y_train_cls_seq.astype(int))
+    class_weight_dict = {0: class_weights[0], 1: class_weights[1]}
+    print(f"Using class weights: Down={class_weights[0]:.3f}, Up={class_weights[1]:.3f}")
+
+    best_f1 = -1.0
+    best_params = None
+    best_threshold = 0.5
+    results = []
+
+    for combo in tqdm(sampled_combinations, desc="LSTM Classifier random search"):
+        params = dict(zip(param_names, combo))
+        params['epochs'] = 50  # Max epochs (early stopping will cut short)
+
+        try:
+            # Build classifier model
+            model = build_lstm_classifier_with_params(lookback, n_features, params)
+
+            # Train with early stopping and class weights
+            history = model.fit(
+                X_train_seq, y_train_cls_seq,
+                validation_data=(X_val_seq, y_val_cls_seq),
+                epochs=params['epochs'],
+                batch_size=params['batch_size'],
+                class_weight=class_weight_dict,
+                callbacks=[
+                    EarlyStopping(
+                        monitor='val_loss',
+                        patience=5,
+                        restore_best_weights=True,
+                        verbose=0,
+                    )
+                ],
+                verbose=0,
+            )
+
+            # Get predicted probabilities
+            y_pred_proba = model.predict(X_val_seq, verbose=0).flatten()
+
+            # Find best threshold
+            thresholds = np.linspace(0.3, 0.7, 41)  # 0.3 to 0.7 in 0.01 steps
+            best_thresh_f1 = -1.0
+            best_thresh = 0.5
+
+            for thresh in thresholds:
+                y_pred_dir = (y_pred_proba > thresh).astype(int)
+                f1 = float(f1_score(y_val_cls_seq, y_pred_dir))
+                if f1 > best_thresh_f1:
+                    best_thresh_f1 = f1
+                    best_thresh = thresh
+
+            results.append({
+                'params': params,
+                'val_f1': best_thresh_f1,
+                'threshold': best_thresh,
+            })
+
+            if best_thresh_f1 > best_f1:
+                best_f1 = best_thresh_f1
+                best_params = params.copy()
+                best_threshold = best_thresh
+
+        except Exception as e:
+            print(f"Error with params {params}: {e}")
+            continue
+
+        finally:
+            # Clear session to prevent memory buildup
+            tf.keras.backend.clear_session()
+
+    print(f"Best params: {best_params}, threshold: {best_threshold:.3f}, Val F1: {best_f1:.4f}")
+
+    return {
+        'best_params': best_params,
+        'best_f1': best_f1,
+        'best_threshold': best_threshold,
+        'search_results': results,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Save/Load Best Parameters
 # ---------------------------------------------------------------------------
@@ -591,6 +799,7 @@ def save_best_params(results: Dict[str, Any]) -> None:
 
             serializable[model_name] = {
                 'best_params': params,
+                'best_threshold': data.get('best_threshold', 0.0),
                 'best_f1': float(data['best_f1']),
             }
 
@@ -613,7 +822,7 @@ def load_best_params() -> Dict[str, Any]:
 # Main Tuning Entry Point
 # ---------------------------------------------------------------------------
 
-def tune_all_models(save_results: bool = True) -> Dict[str, Any]:
+def tune_all_models(save_results: bool = True, use_classifier: bool = False) -> Dict[str, Any]:
     """
     Run hyperparameter tuning for all models.
 
@@ -623,11 +832,20 @@ def tune_all_models(save_results: bool = True) -> Dict[str, Any]:
         3. Save best hyperparameters
         4. Return summary of best configurations
 
+    Args:
+        save_results: Whether to save results to JSON file.
+        use_classifier: If True, tune LSTM as a classifier (binary_crossentropy)
+                       instead of regressor (MSE/MAE/Huber).
+
     Returns:
         dict mapping model_name -> tuning results
     """
     print("=" * 60)
     print("HYPERPARAMETER TUNING")
+    if use_classifier:
+        print("LSTM Mode: CLASSIFIER (binary_crossentropy)")
+    else:
+        print("LSTM Mode: REGRESSOR (MSE/MAE/Huber)")
     print("=" * 60)
 
     # Prepare data
@@ -664,7 +882,7 @@ def tune_all_models(save_results: bool = True) -> Dict[str, Any]:
     )
     results['XGBoost'] = xgb_results
 
-    # 4. Tune LSTM (needs sequential data with SCALED targets)
+    # 4. Tune LSTM (needs sequential data)
     print("\nPreparing LSTM sequences...")
     X_train_seq, y_train_reg_seq, y_train_cls_seq = create_sequences_for_tuning(
         X_train, y_train_reg, y_train_cls  # scaled targets
@@ -674,12 +892,21 @@ def tune_all_models(save_results: bool = True) -> Dict[str, Any]:
     )
     print(f"  X_train_seq: {X_train_seq.shape}, X_val_seq: {X_val_seq.shape}")
 
-    lstm_results = tune_lstm(
-        X_train_seq, y_train_reg_seq,
-        X_val_seq, y_val_reg_seq, y_val_cls_seq,
-        target_scaler,  # Pass scaler for inverse transform during F1 calculation
-    )
-    results['LSTM'] = lstm_results
+    if use_classifier:
+        # Tune LSTM as classifier
+        lstm_results = tune_lstm_classifier(
+            X_train_seq, y_train_cls_seq,
+            X_val_seq, y_val_cls_seq,
+        )
+        results['LSTMClassifier'] = lstm_results
+    else:
+        # Tune LSTM as regressor (original behavior)
+        lstm_results = tune_lstm(
+            X_train_seq, y_train_reg_seq,
+            X_val_seq, y_val_reg_seq, y_val_cls_seq,
+            target_scaler,  # Pass scaler for inverse transform during F1 calculation
+        )
+        results['LSTM'] = lstm_results
 
     # Save results
     if save_results:
@@ -692,6 +919,8 @@ def tune_all_models(save_results: bool = True) -> Dict[str, Any]:
     for model_name, data in results.items():
         if model_name == 'LinearRegression':
             print(f"{model_name}: threshold={data['best_threshold']:.4f}, Val F1={data['best_f1']:.4f}")
+        elif model_name == 'LSTMClassifier':
+            print(f"{model_name}: {data['best_params']}, threshold={data['best_threshold']:.3f}, Val F1={data['best_f1']:.4f}")
         else:
             print(f"{model_name}: {data['best_params']}, Val F1={data['best_f1']:.4f}")
 

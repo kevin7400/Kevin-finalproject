@@ -325,6 +325,9 @@ def add_targets(df: pd.DataFrame, threshold: float = 0.0) -> pd.DataFrame:
       - Else -> 0 (Down)
 
     Default: threshold = 0.0 (%), i.e. strictly positive = Up, otherwise Down.
+
+    Note: Outlier handling (clipping at μ ± 3σ) is applied later in prepare_lstm_data()
+    after the train/test split to avoid data leakage.
     """
     close = df["close"]
 
@@ -549,6 +552,18 @@ def prepare_lstm_data() -> None:
     # Raw targets (for evaluation metrics - RMSE, MAE)
     y_train_reg_raw = df_train[target_reg_col].values
     y_test_reg_raw = df_test[target_reg_col].values
+
+    # Outlier handling: clip returns at μ ± 3σ (using training data only to avoid leakage)
+    mean_return = y_train_reg_raw.mean()
+    std_return = y_train_reg_raw.std()
+    lower_bound = mean_return - 3 * std_return
+    upper_bound = mean_return + 3 * std_return
+    n_clipped_train = ((y_train_reg_raw < lower_bound) | (y_train_reg_raw > upper_bound)).sum()
+    n_clipped_test = ((y_test_reg_raw < lower_bound) | (y_test_reg_raw > upper_bound)).sum()
+    y_train_reg_raw = np.clip(y_train_reg_raw, lower_bound, upper_bound)
+    y_test_reg_raw = np.clip(y_test_reg_raw, lower_bound, upper_bound)
+    print(f"\nOutlier handling: bounds [{lower_bound:.4f}, {upper_bound:.4f}]")
+    print(f"  Clipped {n_clipped_train} train samples, {n_clipped_test} test samples")
 
     # Scale regression targets using StandardScaler (for LSTM training)
     # This centers targets around 0, which helps the LSTM learn both positive

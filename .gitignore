@@ -19,6 +19,7 @@ env/
 # IDE/editor
 .vscode/
 .idea/
+.claude/
 
 # Python packaging
 *.egg-info/

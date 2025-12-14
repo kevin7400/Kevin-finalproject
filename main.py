@@ -13,9 +13,10 @@ This script orchestrates the full pipeline:
 
 Usage (from project root):
 
-    python main.py                    # Standard run (uses tuned params by default)
+    python main.py                    # Standard run with LSTM regressor
     python main.py --tune             # Run hyperparameter tuning (~35 min)
     python main.py --no-tuned         # Run with default parameters instead of tuned
+    python main.py --classifier       # Use LSTM classifier instead of regressor
 
 Or with conda:
 
@@ -40,7 +41,7 @@ from src.data_loader import (
     TRAIN_END,
     TEST_START,
 )
-from src.models import train_and_evaluate_lstm
+from src.models import train_and_evaluate_lstm, train_and_evaluate_lstm_classifier
 from src.evaluation import evaluate_all_models
 
 # ---------------------------------------------------------------------------
@@ -87,6 +88,7 @@ def run_pipeline(
     rebuild_features: bool = True,
     run_tuning: bool = False,
     use_tuned_params: bool = False,
+    use_classifier: bool = False,
 ) -> pd.DataFrame:
     """Run the full end-to-end pipeline.
 
@@ -103,6 +105,10 @@ def run_pipeline(
         use_tuned_params:
             If True, load previously saved tuned params from data/tuning/best_params.json.
             Ignored if run_tuning is True.
+        use_classifier:
+            If True, train LSTM as a classifier (binary_crossentropy loss,
+            sigmoid output) instead of regressor. This directly predicts
+            direction rather than returns.
 
     Returns:
         A pandas DataFrame with one row per model (LSTM + baselines)
@@ -124,28 +130,38 @@ def run_pipeline(
     # Hyperparameter tuning (optional)
     tuned_params = None
     lstm_config = None
+    lstm_key = 'LSTMClassifier' if use_classifier else 'LSTM'
 
     if run_tuning:
         print("\n=== STEP 3.5: Hyperparameter Tuning ===")
         from src.hyperparameter_tuning import tune_all_models
-        tuned_params = tune_all_models()
-        if 'LSTM' in tuned_params and tuned_params['LSTM'].get('best_params'):
-            lstm_config = tuned_params['LSTM']['best_params']
+        tuned_params = tune_all_models(use_classifier=use_classifier)
+        if lstm_key in tuned_params and tuned_params[lstm_key].get('best_params'):
+            lstm_config = tuned_params[lstm_key]['best_params']
     elif use_tuned_params:
         print("\n=== STEP 3.5: Loading Tuned Parameters ===")
         from src.hyperparameter_tuning import load_best_params
         try:
             tuned_params = load_best_params()
             print(f"Loaded tuned params: {list(tuned_params.keys())}")
-            if 'LSTM' in tuned_params and tuned_params['LSTM'].get('best_params'):
+            if lstm_key in tuned_params and tuned_params[lstm_key].get('best_params'):
+                lstm_config = tuned_params[lstm_key]['best_params']
+            elif 'LSTM' in tuned_params and tuned_params['LSTM'].get('best_params'):
+                # Fallback to LSTM if LSTMClassifier not found
                 lstm_config = tuned_params['LSTM']['best_params']
         except FileNotFoundError as e:
             print(f"Warning: {e}")
             print("Running with default parameters.")
 
     print("\n=== STEP 4: Train and evaluate LSTM ===")
-    test_mse, test_mae, history = train_and_evaluate_lstm(config=lstm_config)
-    print(f"\nLSTM test metrics: MSE={test_mse:.4f}, MAE={test_mae:.4f}")
+    if use_classifier:
+        print("Using LSTM CLASSIFIER mode (binary_crossentropy)")
+        metrics, history = train_and_evaluate_lstm_classifier(config=lstm_config)
+        print(f"\nLSTM Classifier metrics: Accuracy={metrics['accuracy']:.4f}, F1={metrics['f1']:.4f}")
+    else:
+        print("Using LSTM REGRESSOR mode (MSE/MAE)")
+        test_mse, test_mae, history = train_and_evaluate_lstm(config=lstm_config)
+        print(f"\nLSTM Regressor metrics: MSE={test_mse:.4f}, MAE={test_mae:.4f}")
 
     print("\n=== STEP 5: Evaluate baselines + LSTM ===")
     results_df = evaluate_all_models(tuned_params=tuned_params)
@@ -192,6 +208,11 @@ def main() -> None:
         help="Disable using tuned parameters (use defaults instead)",
     )
     parser.add_argument(
+        "--classifier",
+        action="store_true",
+        help="Use LSTM classifier (binary_crossentropy) instead of regressor",
+    )
+    parser.add_argument(
         "--force-download",
         action="store_true",
         help="Force re-download of raw data",
@@ -205,6 +226,7 @@ def main() -> None:
         force_download=args.force_download,
         run_tuning=args.tune,
         use_tuned_params=use_tuned,
+        use_classifier=args.classifier,
     )
 
 

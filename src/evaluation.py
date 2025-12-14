@@ -70,13 +70,14 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 def plot_learning_curves(
     history: Any,
     save_path: pathlib.Path | None = None,
+    suffix: str = "",
 ) -> None:
     """
-    Plot LSTM training and validation loss/MAE over epochs.
+    Plot LSTM training and validation loss/metric over epochs.
 
     Creates a figure with two subplots:
-    - Left: MSE (Mean Squared Error) loss
-    - Right: MAE (Mean Absolute Error)
+    - Left: Loss (MSE for regressor, binary_crossentropy for classifier)
+    - Right: Secondary metric (MAE for regressor, Accuracy for classifier)
 
     Both plots show training and validation curves for comparison.
 
@@ -84,9 +85,12 @@ def plot_learning_curves(
     ----------
     history : Any
         Keras History object from model.fit() containing training metrics.
-        Must have keys: 'loss', 'val_loss', 'mae', 'val_mae'.
+        For regressor: 'loss', 'val_loss', 'mae', 'val_mae'
+        For classifier: 'loss', 'val_loss', 'accuracy', 'val_accuracy'
     save_path : pathlib.Path | None, optional
-        Where to save the plot. Defaults to results/learning_curves.png.
+        Where to save the plot. Defaults to results/learning_curves{suffix}.png.
+    suffix : str, optional
+        Suffix to add to the filename (e.g., "_classifier").
 
     Returns
     -------
@@ -103,56 +107,71 @@ def plot_learning_curves(
     >>> history = model.fit(X_train, y_train, validation_split=0.2, epochs=50)
     >>> plot_learning_curves(history)
     Learning curves saved to: .../results/learning_curves.png
+    >>> plot_learning_curves(history, suffix="_classifier")
+    Learning curves saved to: .../results/learning_curves_classifier.png
     """
     if history is None or not hasattr(history, "history"):
         raise ValueError("Invalid history object: must have 'history' attribute")
 
-    required_keys = ["loss", "val_loss", "mae", "val_mae"]
+    # Detect if this is a classifier or regressor based on metrics
+    is_classifier = "accuracy" in history.history
+
+    if is_classifier:
+        required_keys = ["loss", "val_loss", "accuracy", "val_accuracy"]
+        metric_key = "accuracy"
+        metric_label = "Accuracy"
+        loss_label = "Binary Crossentropy"
+    else:
+        required_keys = ["loss", "val_loss", "mae", "val_mae"]
+        metric_key = "mae"
+        metric_label = "MAE"
+        loss_label = "MSE"
+
     for key in required_keys:
         if key not in history.history:
             raise ValueError(f"History missing required key: {key}")
 
     if save_path is None:
-        save_path = RESULTS_DIR / "learning_curves.png"
+        save_path = RESULTS_DIR / f"learning_curves{suffix}.png"
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
-    # Plot MSE (loss)
+    # Plot Loss
     epochs = range(1, len(history.history["loss"]) + 1)
     ax1.plot(
         epochs,
         history.history["loss"],
         "b-",
-        label="Training Loss (MSE)",
+        label=f"Training Loss ({loss_label})",
         linewidth=2,
     )
     ax1.plot(
         epochs,
         history.history["val_loss"],
         "r-",
-        label="Validation Loss (MSE)",
+        label=f"Validation Loss ({loss_label})",
         linewidth=2,
     )
-    ax1.set_title("Model Loss (MSE) Over Epochs", fontsize=14, fontweight="bold")
+    ax1.set_title(f"Model Loss ({loss_label}) Over Epochs", fontsize=14, fontweight="bold")
     ax1.set_xlabel("Epoch", fontsize=12)
-    ax1.set_ylabel("MSE", fontsize=12)
+    ax1.set_ylabel(loss_label, fontsize=12)
     ax1.legend(fontsize=10)
     ax1.grid(True, alpha=0.3)
 
-    # Plot MAE
+    # Plot secondary metric (MAE or Accuracy)
     ax2.plot(
-        epochs, history.history["mae"], "b-", label="Training MAE", linewidth=2
+        epochs, history.history[metric_key], "b-", label=f"Training {metric_label}", linewidth=2
     )
     ax2.plot(
         epochs,
-        history.history["val_mae"],
+        history.history[f"val_{metric_key}"],
         "r-",
-        label="Validation MAE",
+        label=f"Validation {metric_label}",
         linewidth=2,
     )
-    ax2.set_title("Model MAE Over Epochs", fontsize=14, fontweight="bold")
+    ax2.set_title(f"Model {metric_label} Over Epochs", fontsize=14, fontweight="bold")
     ax2.set_xlabel("Epoch", fontsize=12)
-    ax2.set_ylabel("MAE", fontsize=12)
+    ax2.set_ylabel(metric_label, fontsize=12)
     ax2.legend(fontsize=10)
     ax2.grid(True, alpha=0.3)
 
@@ -643,12 +662,16 @@ def evaluate_all_models(tuned_params: dict = None) -> pd.DataFrame:
     rf_params = None
     xgb_params = None
     lr_threshold = 0.0
+    rf_threshold = 0.0
+    xgb_threshold = 0.0
 
     if tuned_params:
         if 'RandomForest' in tuned_params:
             rf_params = tuned_params['RandomForest'].get('best_params')
+            rf_threshold = tuned_params['RandomForest'].get('best_threshold', 0.0)
         if 'XGBoost' in tuned_params:
             xgb_params = tuned_params['XGBoost'].get('best_params')
+            xgb_threshold = tuned_params['XGBoost'].get('best_threshold', 0.0)
         if 'LinearRegression' in tuned_params:
             lr_threshold = tuned_params['LinearRegression'].get('best_threshold', 0.0)
 
@@ -679,8 +702,15 @@ def evaluate_all_models(tuned_params: dict = None) -> pd.DataFrame:
         y_pred_reg_full = model.predict(X_test_scaled)
         y_pred_reg_eval = y_pred_reg_full[LOOKBACK - 1 :]
 
-        # Use tuned threshold for LinearRegression, 0.0 for others
-        threshold = lr_threshold if name == "LinearRegression" else 0.0
+        # Use tuned threshold for each model
+        if name == "LinearRegression":
+            threshold = lr_threshold
+        elif name == "RandomForest":
+            threshold = rf_threshold
+        elif name == "XGBoost":
+            threshold = xgb_threshold
+        else:
+            threshold = 0.0
 
         # DIAGNOSTIC: Check direction distribution
         y_pred_dir = (y_pred_reg_eval > threshold).astype(int)

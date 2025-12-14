@@ -79,6 +79,9 @@ The system is intentionally linear and modular. At a high level:
    - Splits by date:
      - Train: `index <= TRAIN_END`.
      - Test:  `index >= TEST_START`.
+   - Applies outlier handling to returns (after split to avoid data leakage):
+     - Calculates mean (μ) and standard deviation (σ) from training data only.
+     - Clips extreme returns to μ ± 3σ bounds for both train and test.
    - Scales 12 features using `MinMaxScaler` (fit on train, apply on test).
    - Builds sequences:
      - For each time `t`, uses `LOOKBACK` consecutive days `[t-LOOKBACK+1, ..., t]`
