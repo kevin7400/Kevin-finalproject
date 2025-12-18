@@ -24,15 +24,15 @@
   },
   "LSTMMultiTask": {
     "best_params": {
-      "units1": 64,
-      "units2": 32,
-      "dropout": 0.1,
+      "units1": 128,
+      "units2": 64,
+      "dropout": 0.3,
       "learning_rate": 0.005,
       "batch_size": 64,
-      "alpha_return": 0.3,
+      "alpha_return": 0.7,
       "epochs": 50
     },
-    "best_threshold": 0.5646823853254318,
-    "best_f1": 0.6180257510729614
+    "best_threshold": 0.5612523257732391,
+    "best_f1": 0.6065573770491803
   }
 }
