@@ -843,10 +843,6 @@ def train_and_evaluate_lstm_multitask(config: dict = None) -> tuple[dict, tf.ker
 
     history = train_lstm_multitask(model, X_train, y_train_reg, y_train_cls, config=config)
 
-    # Generate and save learning curves
-    from src.evaluation import plot_learning_curves
-    plot_learning_curves(history, suffix="_multitask")
-
     # Save final model
     final_path = LSTM_DIR / "lstm_multitask_final.keras"
     model.save(str(final_path))
@@ -913,10 +909,6 @@ def train_and_evaluate_lstm_classifier(config: dict = None) -> tuple[dict, tf.ke
 
     history = train_lstm_classifier(model, X_train, y_train_cls)
 
-    # Generate and save learning curves
-    from src.evaluation import plot_learning_curves
-    plot_learning_curves(history, suffix="_classifier")
-
     # Save final model
     final_path = LSTM_DIR / "lstm_classifier_final.keras"
     model.save(str(final_path))
@@ -973,12 +965,6 @@ def train_and_evaluate_lstm(config: dict = None) -> tuple[float, float, tf.keras
     model = build_lstm_model(lookback=lookback, n_features=n_features, config=config)
 
     history = train_lstm_model(model, X_train, y_train_reg)
-
-    # Generate and save learning curves
-    # Import here to avoid circular dependency
-    from src.evaluation import plot_learning_curves
-
-    plot_learning_curves(history)
 
     # Save final model (best one already stored via ModelCheckpoint)
     final_path = LSTM_DIR / "lstm_model_final.keras"

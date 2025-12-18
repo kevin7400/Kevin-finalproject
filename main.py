@@ -146,12 +146,41 @@ def run_pipeline(
     lstm_key = lstm_key_map[mode]
 
     if run_tuning:
-        print("\n=== STEP 3.5: Hyperparameter Tuning ===")
+        print("\n=== Hyperparameter Tuning ===")
         from src.hyperparameter_tuning import tune_all_models
         tuned_params = tune_all_models(mode=mode)
+
+        print("\n=== TUNING COMPLETED ===")
+        print(f"  Tuned params saved to: data/tuning/best_params.json")
+        print(f"  Models tuned: {list(tuned_params.keys())}")
+
+        # Extract LSTM config from tuned params
         if lstm_key in tuned_params and tuned_params[lstm_key].get('best_params'):
             lstm_config = tuned_params[lstm_key]['best_params']
-    elif use_tuned_params:
+
+        # Train and evaluate LSTM with tuned params
+        print("\n=== Train and Evaluate LSTM ===")
+        if mode == "classifier":
+            print("Using LSTM CLASSIFIER mode (binary_crossentropy)")
+            metrics, _ = train_and_evaluate_lstm_classifier(config=lstm_config)
+            print(f"\nLSTM Classifier metrics: Accuracy={metrics['accuracy']:.4f}, F1={metrics['f1']:.4f}")
+        elif mode == "multitask":
+            print("Using LSTM MULTITASK mode (shared trunk, dual heads)")
+            metrics, _ = train_and_evaluate_lstm_multitask(config=lstm_config)
+            print(f"\nLSTM Multitask metrics: RMSE={metrics['rmse']:.4f}, F1={metrics['f1']:.4f}")
+        else:
+            print("Using LSTM REGRESSOR mode (MSE/MAE)")
+            test_mse, test_mae, _ = train_and_evaluate_lstm(config=lstm_config)
+            print(f"\nLSTM Regressor metrics: MSE={test_mse:.4f}, MAE={test_mae:.4f}")
+
+        print("\n=== TUNING + LSTM TRAINING COMPLETED ===")
+        print(f"  Tuned params: data/tuning/best_params.json")
+        print(f"  LSTM model:   {LSTM_DIR}")
+        print("\nTo also evaluate baselines, run:")
+        print("  python main.py")
+        return None  # Early return - skip baseline evaluation
+
+    if use_tuned_params:
         print("\n=== STEP 3.5: Loading Tuned Parameters ===")
         from src.hyperparameter_tuning import load_best_params
         try:
@@ -188,9 +217,7 @@ def run_pipeline(
     print(f"  Processed CSV: {processed_path}")
     print(f"  LSTM dir:      {LSTM_DIR}")
     print(f"  Results dir:   {RESULTS_DIR}")
-    print(f"  Visualizations:")
-    print(f"    - Learning curves:     {RESULTS_DIR / 'learning_curves.png'}")
-    print(f"    - Confusion matrices:  {RESULTS_DIR / 'confusion_matrix_*.png'}")
+    print(f"  Confusion matrices: {RESULTS_DIR / 'confusion_matrix_*.png'}")
     print(
         f"  Train period:  {START_DATE} -> {TRAIN_END} "
         f"| Test period: {TEST_START} -> {END_DATE}"

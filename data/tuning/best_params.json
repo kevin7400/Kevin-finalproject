@@ -22,17 +22,17 @@
     "best_threshold": -0.21999999999999997,
     "best_f1": 0.5993690851735016
   },
-  "LSTMMultiTask": {
+  "LSTM": {
     "best_params": {
-      "units1": 128,
-      "units2": 64,
+      "units1": 32,
+      "units2": 32,
       "dropout": 0.3,
       "learning_rate": 0.005,
-      "batch_size": 64,
-      "alpha_return": 0.7,
+      "batch_size": 32,
+      "loss": "mse",
       "epochs": 50
     },
-    "best_threshold": 0.5612523257732391,
-    "best_f1": 0.6065573770491803
+    "best_threshold": 0.018408028036355974,
+    "best_f1": 0.6030534351145038
   }
 }

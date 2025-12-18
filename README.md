@@ -32,7 +32,7 @@ The code follows a simplified 3-file structure under `src/`:
 - **Time-Based Validation**: Proper temporal split (2018-2022 train, 2023-2024 test)
 - **Dual Task**: Predicts both return magnitude (regression) and direction (classification)
 - **Full Reproducibility**: Random seeds set for consistent results across runs
-- **Rich Visualizations**: Learning curves and confusion matrices for all models
+- **Rich Visualizations**: Confusion matrices for all models
 - **Modular Design**: Clean separation of concerns with src/ layout
 - **Comprehensive Tests**: >70% code coverage with pytest
 
@@ -112,14 +112,24 @@ If you change any of these constants, the whole pipeline will adapt automaticall
 
 ## 3. Run the full pipeline
 
-Once the environment is activated:
+Once the environment is activated, you need to run tuning first (once), then run the full evaluation.
 
-**Using virtualenv:**
+### Quick Start
+
 ```bash
-source .venv/bin/activate
-python main.py                    # Uses tuned parameters (default, regressor mode)
-python main.py --tune             # Run hyperparameter tuning (~35 min)
-python main.py --no-tuned         # Use default parameters instead
+# STEP 1: Run tuning first (required once, ~35 min)
+python main.py --tune
+
+# STEP 2: Run full evaluation with tuned params
+python main.py
+```
+
+### All Available Commands
+
+```bash
+python main.py --tune             # Tune hyperparameters + train/evaluate LSTM only
+python main.py                    # Train/evaluate LSTM + baselines (uses tuned params)
+python main.py --no-tuned         # Use default parameters instead of tuned
 python main.py --mode classifier  # Use LSTM classifier (predicts direction)
 python main.py --mode multitask   # Use LSTM multitask (predicts both)
 ```
@@ -127,7 +137,8 @@ python main.py --mode multitask   # Use LSTM multitask (predicts both)
 **Using conda:**
 ```bash
 conda activate kevin-lstm
-python main.py
+python main.py --tune   # First time
+python main.py          # Subsequent runs
 ```
 
 ### LSTM Modes
@@ -153,7 +164,7 @@ Input -> LSTM(units1) -> Dropout -> LSTM(units2) -> Dropout
 
 The multitask model learns shared representations for both return prediction and direction classification, potentially improving both tasks through joint learning.
 
-> **Note**: By default, the pipeline uses previously saved tuned parameters from `data/tuning/best_params.json`. If no tuned parameters exist, it falls back to defaults. Run `python main.py --tune` once to generate optimized parameters.
+> **Important**: You must run `python main.py --tune` once before running `python main.py`. The tuning step generates optimized hyperparameters saved to `data/tuning/best_params.json`, which are required for the full evaluation.
 
 This will:
 
@@ -254,22 +265,14 @@ Results on the test set (2023-2024) with tuned hyperparameters:
 
 | Model | RMSE | MAE | Accuracy | F1 Score | Precision | Recall |
 |-------|------|-----|----------|----------|-----------|--------|
-| **LSTM** | **0.772** | **0.584** | **52.4%** | **0.640** | 0.557 | 0.752 |
-| LinearRegression | 1.157 | 0.896 | 43.2% | 0.451 | 0.495 | 0.415 |
-| XGBoost | 1.233 | 1.011 | 46.9% | 0.318 | 0.574 | 0.220 |
-| RandomForest | 1.148 | 0.950 | 45.3% | 0.287 | 0.539 | 0.195 |
+| **LSTM** | **0.776** | **0.588** | 48.7% | 0.446 | **0.570** | 0.366 |
+| RandomForest | 0.995 | 0.810 | 47.1% | **0.476** | 0.538 | **0.427** |
+| XGBoost | 1.086 | 0.878 | **49.7%** | 0.450 | 0.584 | 0.366 |
+| LinearRegression | 1.157 | 0.896 | 43.2% | 0.326 | 0.492 | 0.244 |
 
 Lower RMSE/MAE indicates better return magnitude prediction. Higher Accuracy/F1 indicates better direction classification.
 
-> **Key Insight**: The LSTM model significantly outperforms all baselines in both regression (RMSE, MAE) and classification (F1 Score) metrics. Stock direction prediction is inherently difficult (random baseline ~50%), making the LSTM's 52.4% accuracy and 0.640 F1 score a meaningful improvement.
-
-### Learning Curves
-
-The LSTM training progress is visualized showing both MSE (loss) and MAE over epochs:
-
-![Learning Curves](results/learning_curves.png)
-
-*Learning curves help identify if the model is overfitting (large gap between train/val) or needs more training epochs.*
+> **Key Insight**: The LSTM model achieves the best regression metrics (lowest RMSE/MAE), demonstrating its ability to capture temporal patterns in stock data. Stock direction prediction is inherently difficult (random baseline ~50%), and all models hover around this baseline for accuracy.
 
 ### Confusion Matrices
 
@@ -316,7 +319,7 @@ The notebook includes:
 - Technical indicators visualization
 - Feature correlation heatmaps
 - Model comparison charts
-- Learning curves and confusion matrices
+- Confusion matrices
 - Summary insights
 
 ---
