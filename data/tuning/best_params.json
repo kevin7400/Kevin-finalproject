@@ -24,15 +24,15 @@
   },
   "LSTM": {
     "best_params": {
-      "units1": 32,
-      "units2": 32,
-      "dropout": 0.3,
-      "learning_rate": 0.005,
-      "batch_size": 32,
+      "units1": 64,
+      "units2": 16,
+      "dropout": 0.2,
+      "learning_rate": 0.001,
+      "batch_size": 64,
       "loss": "mse",
       "epochs": 50
     },
-    "best_threshold": 0.018408028036355974,
-    "best_f1": 0.6030534351145038
+    "best_threshold": 0.052370511926710606,
+    "best_f1": 0.5991902834008097
   }
 }
