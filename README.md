@@ -6,6 +6,9 @@
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Coverage](https://img.shields.io/badge/coverage-70%25%2B-yellowgreen)
 
+> [!CAUTION]
+> Negative potential consequences of an action.
+
 This project builds an end-to-end pipeline to forecast next-day percentage returns and direction (Up/Down) for the S&P 500 using:
 
 - 12 technical indicators
