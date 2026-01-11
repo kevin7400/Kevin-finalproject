@@ -7,7 +7,7 @@
 ![Coverage](https://img.shields.io/badge/coverage-70%25%2B-yellowgreen)
 
 > [!CAUTION]
-> Negative potential consequences of an action.
+> Run the code on Python 3.12 or Python 3.9.
 
 This project builds an end-to-end pipeline to forecast next-day percentage returns and direction (Up/Down) for the S&P 500 using:
 
@@ -230,7 +230,7 @@ Results on the test set (2023-2024) with tuned hyperparameters:
 
 | Model | RMSE | MAE | Accuracy | F1 Score | Precision | Recall |
 |-------|------|-----|----------|----------|-----------|--------|
-| **LSTM** | **0.776** | **0.588** | 48.7% | 0.446 | **0.570** | 0.366 |
+| **LSTM** | **0.773** | **0.585** | 52.9% | 0.569 | **0.586** | 0.553 |
 | RandomForest | 0.995 | 0.810 | 47.1% | **0.476** | 0.538 | **0.427** |
 | XGBoost | 1.086 | 0.878 | **49.7%** | 0.450 | 0.584 | 0.366 |
 | LinearRegression | 1.157 | 0.896 | 43.2% | 0.326 | 0.492 | 0.244 |
