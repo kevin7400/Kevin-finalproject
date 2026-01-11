@@ -35,3 +35,8 @@ htmlcov/
 *.joblib
 *.keras
 *.npy
+
+# BUT include data directory files (pre-tuned for professor)
+!data/**/*.joblib
+!data/**/*.keras
+!data/**/*.npy

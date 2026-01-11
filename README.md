@@ -1,6 +1,6 @@
 # LSTM S&P 500 Forecasting Project
 
-![Python Version](https://img.shields.io/badge/python-3.9%2B-blue)
+![Python Version](https://img.shields.io/badge/python-3.9--3.12-blue)
 ![TensorFlow](https://img.shields.io/badge/TensorFlow-2.x-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
@@ -45,7 +45,7 @@ The code follows a simplified 3-file structure under `src/`:
 From the project root:
 
 ```bash
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -57,7 +57,7 @@ conda env create -f environment.yml
 conda activate kevin-lstm
 ```
 
-Recommended Python version: **3.9+** (tested with Python 3.9 and higher).
+Recommended Python version: **3.9–3.12** (TensorFlow does not yet support Python 3.13+).
 
 ---
 
@@ -112,59 +112,29 @@ If you change any of these constants, the whole pipeline will adapt automaticall
 
 ## 3. Run the full pipeline
 
-Once the environment is activated, you need to run tuning first (once), then run the full evaluation.
+Once the environment is activated, run the evaluation pipeline.
 
 ### Quick Start
 
 ```bash
-# STEP 1: Run tuning first (required once, ~35 min)
-python main.py --tune
-
-# STEP 2: Run full evaluation with tuned params
 python main.py
 ```
+
+The dataset and tuned hyperparameters are already included in the repository, so you can run the pipeline immediately.
 
 ### All Available Commands
 
 ```bash
-python main.py --tune             # Tune hyperparameters + train/evaluate LSTM only
 python main.py                    # Train/evaluate LSTM + baselines (uses tuned params)
+python main.py --tune             # (Optional) Re-run hyperparameter tuning (~35 min)
 python main.py --no-tuned         # Use default parameters instead of tuned
-python main.py --mode classifier  # Use LSTM classifier (predicts direction)
-python main.py --mode multitask   # Use LSTM multitask (predicts both)
 ```
 
 **Using conda:**
 ```bash
 conda activate kevin-lstm
-python main.py --tune   # First time
-python main.py          # Subsequent runs
+python main.py
 ```
-
-### LSTM Modes
-
-The pipeline supports three LSTM modes via the `--mode` flag:
-
-| Mode | Description | Output | RMSE/MAE |
-|------|-------------|--------|----------|
-| `regressor` (default) | Predicts returns, derives direction from sign | Returns + Direction | Valid |
-| `classifier` | Predicts direction directly via sigmoid | Direction only | N/A |
-| `multitask` | Shared trunk with dual heads for both tasks | Returns + Direction | Valid |
-
-**Multitask Architecture:**
-```
-Input -> LSTM(units1) -> Dropout -> LSTM(units2) -> Dropout
-                    |
-            +-------+-------+
-            |               |
-        Dense(1)        Dense(1)
-        linear          sigmoid
-        return_out      dir_out
-```
-
-The multitask model learns shared representations for both return prediction and direction classification, potentially improving both tasks through joint learning.
-
-> **Important**: You must run `python main.py --tune` once before running `python main.py`. The tuning step generates optimized hyperparameters saved to `data/tuning/best_params.json`, which are required for the full evaluation.
 
 This will:
 
@@ -224,9 +194,7 @@ This will:
 The pipeline includes an optional hyperparameter tuning step that optimizes all models:
 
 ```bash
-python main.py --tune                   # Tune with regressor mode (default)
-python main.py --tune --mode classifier # Tune with classifier mode
-python main.py --tune --mode multitask  # Tune with multitask mode
+python main.py --tune
 ```
 
 **What gets tuned:**
@@ -236,20 +204,15 @@ python main.py --tune --mode multitask  # Tune with multitask mode
 | LinearRegression | Grid Search | Classification threshold |
 | RandomForest | Grid Search | n_estimators, max_depth, min_samples_split, threshold |
 | XGBoost | Grid Search | n_estimators, learning_rate, max_depth, gamma, threshold |
-| LSTM (regressor) | Random Search | units, dropout, learning_rate, batch_size, loss, **threshold** |
-| LSTM (classifier) | Random Search | units, dropout, learning_rate, batch_size, **threshold** |
-| LSTM (multitask) | Random Search | units, dropout, learning_rate, batch_size, alpha_return, **threshold** |
+| LSTM | Random Search | units, dropout, learning_rate, batch_size, loss, **threshold** |
 
 **Threshold Tuning:**
 
-All models now include optimal threshold tuning for direction prediction:
-- For regressors: threshold is applied to raw return predictions
-- For classifiers: threshold is applied to sigmoid probabilities
-- Thresholds are found using quantile-based search on validation data
+All models include optimal threshold tuning for direction prediction. Thresholds are applied to raw return predictions and found using quantile-based search on validation data.
 
 **Class Imbalance Handling:**
 
-The baseline models (RandomForest, XGBoost) and LSTM classifier/multitask use balanced sample weights during training to prevent them from exploiting class imbalance. Without this, models could achieve artificially high F1 scores by always predicting the majority class.
+The baseline models (RandomForest, XGBoost) use balanced sample weights during training to prevent them from exploiting class imbalance.
 
 Tuned parameters are saved to `data/tuning/best_params.json` and automatically loaded in subsequent runs.
 
