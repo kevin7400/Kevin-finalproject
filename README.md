@@ -27,7 +27,7 @@ The code follows a simplified 3-file structure under `src/`:
 - **12 Technical Indicators**: RSI, MACD, Bollinger Bands, SMA, EMA, OBV, ATR, and more
 - **Stacked LSTM Architecture**: 2-layer deep learning model with dropout regularization
 - **Comprehensive Baselines**: Linear Regression, Random Forest, XGBoost for comparison
-- **Hyperparameter Tuning**: Grid search for baselines, random search for LSTM (~35 min)
+- **Hyperparameter Tuning**: Grid search for baselines, random search for LSTM (~40 min)
 - **Class Imbalance Handling**: Balanced sample weights for fair model comparison
 - **Time-Based Validation**: Proper temporal split (2018-2022 train, 2023-2024 test)
 - **Dual Task**: Predicts both return magnitude (regression) and direction (classification)
@@ -120,13 +120,13 @@ Once the environment is activated, run the evaluation pipeline.
 python main.py
 ```
 
-The dataset and tuned hyperparameters are already included in the repository, so you can run the pipeline immediately.
+The dataset and tuned hyperparameters are already included in the repository, so you can run the pipeline immediately. The standard python main.py includes tuned hyperparameters so it's not necessary to run hyperparameter tuning.
 
 ### All Available Commands
 
 ```bash
 python main.py                    # Train/evaluate LSTM + baselines (uses tuned params)
-python main.py --tune             # (Optional) Re-run hyperparameter tuning (~35 min)
+python main.py --tune             # (Optional) Re-run hyperparameter tuning (~40 min)
 python main.py --no-tuned         # Use default parameters instead of tuned
 ```
 
