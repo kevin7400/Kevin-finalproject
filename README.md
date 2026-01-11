@@ -45,7 +45,7 @@ The code follows a simplified 3-file structure under `src/`:
 From the project root:
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -115,12 +115,11 @@ If you change any of these constants, the whole pipeline will adapt automaticall
 Once the environment is activated, run the evaluation pipeline.
 
 ### Quick Start
+The dataset and tuned hyperparameters are already included in the repository, so you can run the pipeline immediately. The standard python main.py includes tuned hyperparameters so it's not necessary to run hyperparameter tuning.
 
 ```bash
 python main.py
 ```
-
-The dataset and tuned hyperparameters are already included in the repository, so you can run the pipeline immediately. The standard python main.py includes tuned hyperparameters so it's not necessary to run hyperparameter tuning.
 
 ### All Available Commands
 
